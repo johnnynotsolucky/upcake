@@ -1,0 +1,21 @@
+[package]
+name = "upcake"
+version = "0.1.0"
+authors = ["Tyrone Tudehope <tyronetudehope@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+httpstat = { path = "../httpstat" }
+eyre = "0.6.5"
+serde = { version = "1.0.130", features = ["derive"] }
+serde_yaml = "0.8.20"
+structopt = "0.3.22"
+thiserror = "1.0.26"
+toml = "0.5.8"
+
+# TODO Remove
+[features]
+ssl = ["httpstat/ssl"]
+http2 = ["httpstat/http2"]
+static-ssl = ["httpstat/static-ssl"]
+static-curl = ["httpstat/static-curl"]

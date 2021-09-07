@@ -17,7 +17,7 @@ pub struct Config {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct RequestAssertion<T: ?Sized> {
+pub struct RequestAssertion<T> {
     #[serde(default)]
     path: String,
     #[serde(flatten)]

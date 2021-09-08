@@ -18,7 +18,7 @@ pub struct RequestAssertion<T> {
 #[derive(Debug, Clone)]
 pub enum AssertionResult {
     Success(Assertion, JsonValue),
-    Failure(Assertion, Option<JsonValue>, String),
+    Failure(Assertion, Option<JsonValue>, Option<String>),
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -34,37 +34,39 @@ pub enum Assertion {
     Length(RequestAssertion<Length>),
     #[serde(rename = "contains")]
     Contains(RequestAssertion<Contains>),
+    #[serde(rename = "exists")]
+    Exists(RequestAssertion<Exists>),
     #[serde(rename = "greater-than")]
     GreaterThan(RequestAssertion<GreaterThan>),
     #[serde(rename = "less-than")]
     LessThan(RequestAssertion<LessThan>),
+    #[serde(skip_deserializing)]
+    ErrorAssertion,
 }
 
 impl Assertion {
-    pub fn assert(&self, value: &JsonValue, callback: fn(AssertionResult)) -> Result<()> {
+    pub fn assert(&self, value: &JsonValue) -> Result<AssertionResult> {
         if let Ok(found_value) = jql::walker(value, Some(self.path())) {
             let result = serde_yaml::to_value(&found_value)?;
             let assertion_result = self.inner_assert(&result);
 
             if assertion_result {
-                callback(AssertionResult::Success(self.clone(), found_value));
+                Ok(AssertionResult::Success(self.clone(), found_value))
             } else {
                 // TODO implement Display for AssertionResult
-                callback(AssertionResult::Failure(
+                Ok(AssertionResult::Failure(
                     self.clone(),
                     Some(found_value),
-                    format!("{} failed for reasons", &self.path()),
-                ));
+                    None,
+                ))
             }
         } else {
-            callback(AssertionResult::Failure(
+            Ok(AssertionResult::Failure(
                 self.clone(),
                 None,
-                format!("{} is invalid", &self.path()),
-            ));
+                Some("Invalid path".into()),
+            ))
         }
-
-        Ok(())
     }
 
     fn path(&self) -> &str {
@@ -74,8 +76,10 @@ impl Assertion {
             Self::NotEqual(assertion) => &assertion.path,
             Self::Length(assertion) => &assertion.path,
             Self::Contains(assertion) => &assertion.path,
+            Self::Exists(assertion) => &assertion.path,
             Self::GreaterThan(assertion) => &assertion.path,
             Self::LessThan(assertion) => &assertion.path,
+            _ => panic!("Invalid assertion configuration"),
         }
     }
 
@@ -86,8 +90,10 @@ impl Assertion {
             Self::NotEqual(assertion) => assertion.assert(value),
             Self::Length(assertion) => assertion.assert(value),
             Self::Contains(assertion) => assertion.assert(value),
+            Self::Exists(assertion) => assertion.assert(value),
             Self::GreaterThan(assertion) => assertion.assert(value),
             Self::LessThan(assertion) => assertion.assert(value),
+            _ => panic!("Invalid assertion configuration"),
         }
     }
 }
@@ -211,21 +217,31 @@ impl Assert for RequestAssertion<Contains> {
                 .value
                 .as_str()
                 .map_or(false, |substring| value.contains(substring)),
-            YamlValue::Mapping(value) => self
-                .assertion
-                .value
-                .as_str()
-                .map_or(false, |key| value.contains_key(&YamlValue::from(key))),
-            YamlValue::Sequence(value) => self.assertion.value.as_i64().map_or(false, |idx| {
-                // serde_yaml::Value only converts to i64, we'd like to not panic if the assertion
-                // uses something less than 0.
-                // TODO at somepoint we should validate the inputs
-                if idx >= 0 {
-                    value.len() >= idx as usize
-                } else {
-                    false
-                }
-            }),
+            YamlValue::Sequence(value) => {
+                let search_value = YamlValue::from(self.assertion.value.clone());
+                value.iter().find(|item| {
+                    **item == search_value
+                }).is_some()
+            },
+            _ => false,
+        }
+    }
+}
+
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct Exists {
+    pub value: YamlValue,
+}
+
+impl Assert for RequestAssertion<Exists> {
+    fn assert(&self, value: &YamlValue) -> bool {
+        match value {
+            YamlValue::Mapping(value) => value.contains_key(&self.assertion.value),
+            // YamlValue::Mapping(value) => self
+            //     .assertion
+            //     .value
+            //     .as_str()
+            //     .map_or(false, |key| value.contains_key()),
             _ => false,
         }
     }

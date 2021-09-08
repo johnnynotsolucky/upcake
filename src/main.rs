@@ -5,21 +5,24 @@ use httpstat::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use serde_yaml::Value as YamlValue;
 use std::time::Duration;
 use std::{fs, str};
 use structopt::StructOpt;
 
-use upcake::assertions::Assertion;
+use upcake::assertions::{Assertion, AssertionResult};
 
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Config {
+pub struct RequestConfig {
     pub request: String,
+    pub connect_timeout: Option<u64>,
     pub data: Option<String>,
     pub headers: Option<Vec<String>>,
     pub url: String,
     pub assertions: Vec<Assertion>,
 }
+
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct Config(Vec<RequestConfig>);
 
 // fn value_to_string(value: &YamlValue) -> String {
 //     match value {
@@ -125,10 +128,6 @@ struct Opt {
     /// Follow redirects
     location: bool,
 
-    #[structopt(name = "millis", long = "connect-timeout")]
-    /// Maximum time allowed for connection
-    connect_timeout: Option<u64>,
-
     #[structopt(short = "k", long = "insecure")]
     /// Allow insecure server connections when using SSL
     insecure: bool,
@@ -141,29 +140,58 @@ struct Opt {
     config: String,
 }
 
-fn main() -> Result<()> {
-    let opt = Opt::from_args();
-
-    let upcake_config: Config = serde_yaml::from_str(&fs::read_to_string(opt.config)?)?;
-
+// TODO return maintain request state
+fn run_request(
+    opt: &Opt,
+    request_config: RequestConfig,
+) -> Result<Vec<AssertionResult>> {
     let httpstat_config = HttpstatConfig {
         location: opt.location,
-        connect_timeout: opt.connect_timeout.map(Duration::from_millis),
         insecure: opt.insecure,
         verbose: opt.verbose,
 
-        request: upcake_config.request,
-        data: upcake_config.data,
-        headers: upcake_config.headers,
-        url: upcake_config.url,
+        request: request_config.request,
+        url: request_config.url,
+        connect_timeout: request_config.connect_timeout.map(Duration::from_millis),
+        data: request_config.data,
+        headers: request_config.headers,
     };
 
-    let stat_result: StatResult = httpstat(httpstat_config)?.into();
+    let mut results: Vec<AssertionResult> = Vec::new();
 
-    let json_result = serde_json::to_value(&stat_result)?;
+    match httpstat(&httpstat_config) {
+        Ok(httpstat_result) => {
+			let stat_result: StatResult = httpstat_result.into();
+            let json_result = serde_json::to_value(&stat_result)?;
 
-    for assertion in upcake_config.assertions.iter() {
-        assertion.assert(&json_result, |result| println!("{:?}", result))?;
+            for assertion in request_config.assertions.iter() {
+                let result = assertion.assert(&json_result)?;
+                results.push(result);
+            }
+        }
+        Err(error) => {
+            results.push(AssertionResult::Failure(
+					Assertion::ErrorAssertion,
+					None,
+					Some(error.to_string())
+				));
+        }
+    }
+
+    Ok(results)
+}
+
+fn main() -> Result<()> {
+    let opt = Opt::from_args();
+
+    let config: Config = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
+
+    for request_config in config.0 {
+		println!("Request: {:?}\n", &request_config);
+		for result in run_request(&opt, request_config)? {
+			println!("Assert: {:?}", &result);
+		}
+		println!("\n");
     }
 
     Ok(())

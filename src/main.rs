@@ -132,6 +132,10 @@ struct Opt {
     /// Allow insecure server connections when using SSL
     insecure: bool,
 
+    #[structopt(name = "millis", long = "connect-timeout")]
+    /// Maximum time allowed for connection
+    connect_timeout: Option<u64>,
+
     #[structopt(short = "v", long = "verbose")]
     /// Verbose output
     verbose: bool,
@@ -149,10 +153,10 @@ fn run_request(
         location: opt.location,
         insecure: opt.insecure,
         verbose: opt.verbose,
+        connect_timeout: opt.connect_timeout.map(Duration::from_millis),
 
         request: request_config.request,
         url: request_config.url,
-        connect_timeout: request_config.connect_timeout.map(Duration::from_millis),
         data: request_config.data,
         headers: request_config.headers,
     };

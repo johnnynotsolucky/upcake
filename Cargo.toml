@@ -5,7 +5,7 @@ authors = ["Tyrone Tudehope <tyronetudehope@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-httpstat = { path = "../httpstat" }
+httpstat = { path = "../httpstat", default-features = false }
 eyre = "0.6.5"
 jql = "2.9.5"
 serde = { version = "1.0.130", features = ["derive"] }
@@ -17,7 +17,9 @@ toml = "0.5.8"
 
 # TODO Remove
 [features]
+default = ["httpstat/mesalink", "httpstat/http2"]
 ssl = ["httpstat/ssl"]
+mesalink = ["httpstat/mesalink"]
 http2 = ["httpstat/http2"]
 static-ssl = ["httpstat/static-ssl"]
 static-curl = ["httpstat/static-curl"]

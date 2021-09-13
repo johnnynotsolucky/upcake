@@ -2,6 +2,7 @@ use eyre::Result;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
+use std::fmt;
 
 trait Assert {
     fn assert(&self, result: &YamlValue) -> bool;
@@ -53,7 +54,6 @@ impl Assertion {
             if assertion_result {
                 Ok(AssertionResult::Success(self.clone(), found_value))
             } else {
-                // TODO implement Display for AssertionResult
                 Ok(AssertionResult::Failure(
                     self.clone(),
                     Some(found_value),
@@ -98,6 +98,22 @@ impl Assertion {
     }
 }
 
+impl fmt::Display for Assertion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Self::Between(assertion) => assertion.fmt(f),
+            Self::Equal(assertion) => assertion.fmt(f),
+            Self::NotEqual(assertion) => assertion.fmt(f),
+            Self::Length(assertion) => assertion.fmt(f),
+            Self::Contains(assertion) => assertion.fmt(f),
+            Self::Exists(assertion) => assertion.fmt(f),
+            Self::GreaterThan(assertion) => assertion.fmt(f),
+            Self::LessThan(assertion) => assertion.fmt(f),
+            _ => panic!("Invalid assertion configuration"),
+        }
+    }
+}
+
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Between {
     pub min: YamlValue,
@@ -113,17 +129,39 @@ impl Assert for RequestAssertion<Between> {
         } else {
             *value > self.assertion.min && *value < self.assertion.max
         }
-        // let message = format!(
-        // 	"{} not within range of [{}, {}]",
-        // 	value_to_string(value),
-        // 	value_to_string(min),
-        // 	value_to_string(max)
-        // );
-        //
-        // callback(AssertionResult::Failure(
-        // 	Assertion::Between(self.clone()),
-        // 	message,
-        // ));
+    }
+}
+
+fn value_to_string(value: &YamlValue) -> String {
+    match value {
+        YamlValue::Null => "null".into(),
+        YamlValue::Bool(inner) => format!("{}", inner),
+        YamlValue::Number(inner) => {
+            if inner.is_i64() {
+                format!("{}", inner.as_i64().unwrap())
+            } else {
+                format!("{}", inner.as_f64().unwrap())
+            }
+        }
+        YamlValue::String(inner) => inner.into(),
+        YamlValue::Sequence(inner) => serde_json::to_string(inner).unwrap(),
+        YamlValue::Mapping(inner) => serde_json::to_string(inner).unwrap(),
+    }
+}
+
+impl fmt::Display for RequestAssertion<Between> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "between {} and {} ({})",
+            value_to_string(&self.assertion.min),
+            value_to_string(&self.assertion.max),
+            if self.assertion.inclusive {
+                "inclusive"
+            } else {
+                "exclusive"
+            }
+        )
     }
 }
 
@@ -135,6 +173,12 @@ pub struct Equal {
 impl Assert for RequestAssertion<Equal> {
     fn assert(&self, value: &YamlValue) -> bool {
         *value == self.assertion.value
+    }
+}
+
+impl fmt::Display for RequestAssertion<Equal> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "equals {}", value_to_string(&self.assertion.value))
     }
 }
 
@@ -155,6 +199,21 @@ impl Assert for RequestAssertion<GreaterThan> {
     }
 }
 
+impl fmt::Display for RequestAssertion<GreaterThan> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "greater than {} ({})",
+            value_to_string(&self.assertion.value),
+            if self.assertion.inclusive {
+                "inclusive"
+            } else {
+                "exclusive"
+            }
+        )
+    }
+}
+
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThan {
     pub value: YamlValue,
@@ -169,6 +228,21 @@ impl Assert for RequestAssertion<LessThan> {
         } else {
             *value < self.assertion.value
         }
+    }
+}
+
+impl fmt::Display for RequestAssertion<LessThan> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "less than {} ({})",
+            value_to_string(&self.assertion.value),
+            if self.assertion.inclusive {
+                "inclusive"
+            } else {
+                "exclusive"
+            }
+        )
     }
 }
 
@@ -193,6 +267,13 @@ impl Assert for RequestAssertion<Length> {
     }
 }
 
+impl fmt::Display for RequestAssertion<Length> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "length ")?;
+        self.assertion.inner.fmt(f)
+    }
+}
+
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct NotEqual {
     pub value: YamlValue,
@@ -201,6 +282,12 @@ pub struct NotEqual {
 impl Assert for RequestAssertion<NotEqual> {
     fn assert(&self, value: &YamlValue) -> bool {
         *value != self.assertion.value
+    }
+}
+
+impl fmt::Display for RequestAssertion<NotEqual> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not equals {}", value_to_string(&self.assertion.value))
     }
 }
 
@@ -219,12 +306,16 @@ impl Assert for RequestAssertion<Contains> {
                 .map_or(false, |substring| value.contains(substring)),
             YamlValue::Sequence(value) => {
                 let search_value = YamlValue::from(self.assertion.value.clone());
-                value.iter().find(|item| {
-                    **item == search_value
-                }).is_some()
-            },
+                value.iter().find(|item| **item == search_value).is_some()
+            }
             _ => false,
         }
+    }
+}
+
+impl fmt::Display for RequestAssertion<Contains> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "contains {}", value_to_string(&self.assertion.value))
     }
 }
 
@@ -237,12 +328,13 @@ impl Assert for RequestAssertion<Exists> {
     fn assert(&self, value: &YamlValue) -> bool {
         match value {
             YamlValue::Mapping(value) => value.contains_key(&self.assertion.value),
-            // YamlValue::Mapping(value) => self
-            //     .assertion
-            //     .value
-            //     .as_str()
-            //     .map_or(false, |key| value.contains_key()),
             _ => false,
         }
+    }
+}
+
+impl fmt::Display for RequestAssertion<Exists> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "exists {}", value_to_string(&self.assertion.value))
     }
 }

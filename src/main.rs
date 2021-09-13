@@ -9,7 +9,8 @@ use std::time::Duration;
 use std::{fs, str};
 use structopt::StructOpt;
 
-use upcake::assertions::{Assertion, AssertionResult};
+use upcake::assertions::Assertion;
+use upcake::reporters::{Reporter, TapReporter};
 
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {
@@ -23,23 +24,6 @@ pub struct RequestConfig {
 
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config(Vec<RequestConfig>);
-
-// fn value_to_string(value: &YamlValue) -> String {
-//     match value {
-//         YamlValue::Null => "null".into(),
-//         YamlValue::Bool(inner) => format!("{}", inner),
-//         YamlValue::Number(inner) => {
-//             if inner.is_i64() {
-//                 format!("{}", inner.as_i64().unwrap())
-//             } else {
-//                 format!("{}", inner.as_f64().unwrap())
-//             }
-//         }
-//         YamlValue::String(inner) => inner.into(),
-//         YamlValue::Sequence(inner) => serde_json::to_string(inner).unwrap(),
-//         YamlValue::Mapping(inner) => serde_json::to_string(inner).unwrap(),
-//     }
-// }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Timing {
@@ -145,10 +129,7 @@ struct Opt {
 }
 
 // TODO return maintain request state
-fn run_request(
-    opt: &Opt,
-    request_config: RequestConfig,
-) -> Result<Vec<AssertionResult>> {
+fn run_request(opt: &Opt, request_config: RequestConfig) -> Result<()> {
     let httpstat_config = HttpstatConfig {
         location: opt.location,
         insecure: opt.insecure,
@@ -161,28 +142,28 @@ fn run_request(
         headers: request_config.headers,
     };
 
-    let mut results: Vec<AssertionResult> = Vec::new();
+    let assertions = request_config.assertions;
+
+    let mut reporter = TapReporter::new();
+    reporter.plan(&assertions);
 
     match httpstat(&httpstat_config) {
         Ok(httpstat_result) => {
-			let stat_result: StatResult = httpstat_result.into();
+            let stat_result: StatResult = httpstat_result.into();
             let json_result = serde_json::to_value(&stat_result)?;
 
-            for assertion in request_config.assertions.iter() {
-                let result = assertion.assert(&json_result)?;
-                results.push(result);
+            for (idx, assertion) in assertions.iter().enumerate() {
+                reporter.step_result(idx, assertion.assert(&json_result)?);
             }
         }
         Err(error) => {
-            results.push(AssertionResult::Failure(
-					Assertion::ErrorAssertion,
-					None,
-					Some(error.to_string())
-				));
+            reporter.bail(error.to_string());
         }
     }
 
-    Ok(results)
+    reporter.end();
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -191,11 +172,7 @@ fn main() -> Result<()> {
     let config: Config = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
 
     for request_config in config.0 {
-		println!("Request: {:?}\n", &request_config);
-		for result in run_request(&opt, request_config)? {
-			println!("Assert: {:?}", &result);
-		}
-		println!("\n");
+        run_request(&opt, request_config)?;
     }
 
     Ok(())

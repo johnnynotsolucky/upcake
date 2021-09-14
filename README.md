@@ -11,8 +11,20 @@
       path: ."response_code"
       value: 200
 
+- request: "GET"
+  url: "https://httpbin.org/status/204"
+  connect_timeout: 10
+  assertions:
+    - type: equal
+      path: ."response_code"
+      value: 200
+
 - request: "POST"
+  # summary: Test Httpbin.org POST
   url: "https://httpbin.org/post"
+  headers:
+    - "Content-Type: application/json"
+  data: '{"foo": "bar"}'
   assertions:
     - type: between
       path: ."response_code"
@@ -22,7 +34,8 @@
 
     - type: equal
       path: ."response_code"
-      value: 200
+      value: 300
+      skip: Fix this
 
     - type: not-equal
       path: ."response_code"
@@ -36,11 +49,46 @@
     - type: contains
       path: ."headers".[]
       value:
-        name: content-type
+        name: Content-Type
         value: application/json
 
     # httpbin.org response body
     - type: exists
       path: ."json"."headers".{}
       value: Accept
+
+    - type: length
+      path: ."headers".[]
+      assertion:
+        type: equal
+        value: 7
+```
+
+```bash
+$ upcake ./request-assertions.yaml
+
+TAP version 13
+#
+# GET https://httpbin.org/get
+#
+ok 1 - equals 200
+#
+# GET https://httpbin.org/status/204
+#
+not ok 2 - equals 200
+  ---
+  assertion: equals 200
+  result: 204
+  ---
+#
+# POST https://httpbin.org/post
+#
+ok 3 - between 200 and 399 (inclusive)
+ok 4 - equals 300 # Fix this
+ok 5 - not equals 300
+ok 6 - less than 100 (inclusive)
+ok 7 - contains {"name":"Content-Type","value":"application/json"}
+ok 8 - exists Accept
+ok 9 - length equals 7
+1..9
 ```

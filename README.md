@@ -65,7 +65,7 @@
 ```
 
 ```bash
-$ upcake ./request-assertions.yaml
+$ upcake ./cupcakes.yaml
 
 TAP version 13
 #

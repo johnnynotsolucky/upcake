@@ -84,7 +84,7 @@ not ok 2 - equals 200
 # POST https://httpbin.org/post
 #
 ok 3 - between 200 and 399 (inclusive)
-ok 4 - equals 300 # Fix this
+ok 4 - equals 300 # SKIP Fix this
 ok 5 - not equals 300
 ok 6 - less than 100 (inclusive)
 ok 7 - contains {"name":"Content-Type","value":"application/json"}

@@ -1,12 +1,19 @@
 pub mod assertions;
 pub mod reporters;
 
+use eyre::Result;
+use futures::future;
+use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::str;
+use std::time::Duration;
+use thiserror::Error;
+use tokio::task;
 
 use assertions::Assertion;
+use reporters::Reporter;
 
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {
@@ -20,7 +27,13 @@ pub struct RequestConfig {
 }
 
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Config(pub Vec<RequestConfig>);
+pub struct Config {
+	pub location: bool,
+	pub insecure: bool,
+	pub connect_timeout: Option<u64>,
+	pub verbose: bool,
+	pub requests: Vec<RequestConfig>,
+}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Timing {
@@ -100,4 +113,73 @@ impl From<HttpstatResult> for StatResult {
 
 		stat_result
 	}
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+	#[error("{0:?}")]
+	RequestError(RequestConfig, String),
+}
+
+fn run_request(
+	config: &Config,
+	request_config: RequestConfig,
+) -> Result<(RequestConfig, StatResult), Error> {
+	let httpstat_config = HttpstatConfig {
+		location: config.location,
+		insecure: config.insecure,
+		verbose: config.verbose,
+		connect_timeout: config.connect_timeout.map(Duration::from_millis),
+
+		request: request_config.request.clone(),
+		url: request_config.url.clone(),
+		data: request_config.data.clone(),
+		headers: request_config.headers.clone(),
+	};
+
+	match httpstat(&httpstat_config) {
+		Ok(httpstat_result) => {
+			// println!("req: {:?}", &httpstat_result);
+			Ok((request_config, httpstat_result.into()))
+		}
+		Err(error) => Err(Error::RequestError(request_config, error.to_string())),
+	}
+}
+
+pub async fn upcake(config: Config, reporter: &mut dyn Reporter) -> Result<()> {
+	let mut requests = Vec::new();
+
+	for request_config in &config.requests {
+		let config = config.clone();
+		let request_config = request_config.clone();
+
+		requests.push(task::spawn_blocking(move || {
+			run_request(&config, request_config)
+		}))
+	}
+
+	reporter.start();
+
+	let results = future::join_all(requests).await;
+
+	for result in results {
+		match result? {
+			Ok((request_config, stat_result)) => {
+				reporter.step_suite(&request_config);
+				let json_result = serde_json::to_value(&stat_result)?;
+
+				for assertion in request_config.assertions.iter() {
+					reporter.step_result(assertion.assert(&json_result)?);
+				}
+			}
+			Err(Error::RequestError(request_config, error)) => {
+				reporter.step_suite(&request_config);
+				reporter.bail(error);
+			}
+		}
+	}
+
+	reporter.end();
+
+	Ok(())
 }

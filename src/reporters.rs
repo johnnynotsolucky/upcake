@@ -42,7 +42,10 @@ impl Reporter for TapReporter {
 
 		match result {
 			AssertionResult::Skip(assertion, reason) => {
-				println!("ok {} - {} # SKIP {}", self.assertion_count, assertion, reason);
+				println!(
+					"ok {} - {} # SKIP {}",
+					self.assertion_count, assertion, reason
+				);
 			}
 			AssertionResult::Success(assertion, _value) => {
 				println!("ok {} - {}", self.assertion_count, assertion);

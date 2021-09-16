@@ -12,7 +12,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::task;
 
-use assertions::{Assertion, RequestAssertion, Equal};
+use assertions::{AssertionConfig, RequestAssertionConfig, Equal};
 use reporters::Reporter;
 
 #[derive(Deserialize, Default, Debug, Clone)]
@@ -24,11 +24,11 @@ pub struct RequestConfig {
 	pub headers: Option<Vec<String>>,
 	pub url: String,
   #[serde(default = "default_assertions")]
-	pub assertions: Vec<Assertion>,
+	pub assertions: Vec<AssertionConfig>,
 }
 
-pub fn default_assertions() -> Vec<Assertion> {
-    vec![Assertion::Equal(RequestAssertion {
+pub fn default_assertions() -> Vec<AssertionConfig> {
+    vec![AssertionConfig::Equal(RequestAssertionConfig {
         skip: None,
         path: ".\"response_code\"".into(),
         assertion: Equal { value: serde_yaml::to_value(200).unwrap() },

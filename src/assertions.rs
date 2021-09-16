@@ -9,7 +9,7 @@ trait Assert {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct RequestAssertion<T: ?Sized> {
+pub struct RequestAssertionConfig<T: ?Sized> {
 	#[serde(default)]
 	pub skip: Option<String>,
 	#[serde(default)]
@@ -20,35 +20,35 @@ pub struct RequestAssertion<T: ?Sized> {
 
 #[derive(Debug, Clone)]
 pub enum AssertionResult {
-	Success(Assertion, JsonValue),
-	Failure(Assertion, Option<JsonValue>, Option<String>),
-	Skip(Assertion, String),
+	Success(AssertionConfig, JsonValue),
+	Failure(AssertionConfig, Option<JsonValue>, Option<String>),
+	Skip(AssertionConfig, String),
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
-pub enum Assertion {
+pub enum AssertionConfig {
 	#[serde(rename = "between")]
-	Between(RequestAssertion<Between>),
+	Between(RequestAssertionConfig<Between>),
 	#[serde(rename = "equal")]
-	Equal(RequestAssertion<Equal>),
+	Equal(RequestAssertionConfig<Equal>),
 	#[serde(rename = "not-equal")]
-	NotEqual(RequestAssertion<NotEqual>),
+	NotEqual(RequestAssertionConfig<NotEqual>),
 	#[serde(rename = "length")]
-	Length(RequestAssertion<Length>),
+	Length(RequestAssertionConfig<Length>),
 	#[serde(rename = "contains")]
-	Contains(RequestAssertion<Contains>),
+	Contains(RequestAssertionConfig<Contains>),
 	#[serde(rename = "exists")]
-	Exists(RequestAssertion<Exists>),
+	Exists(RequestAssertionConfig<Exists>),
 	#[serde(rename = "greater-than")]
-	GreaterThan(RequestAssertion<GreaterThan>),
+	GreaterThan(RequestAssertionConfig<GreaterThan>),
 	#[serde(rename = "less-than")]
-	LessThan(RequestAssertion<LessThan>),
+	LessThan(RequestAssertionConfig<LessThan>),
 	#[serde(skip_deserializing)]
 	ErrorAssertion,
 }
 
-impl Assertion {
+impl AssertionConfig {
 	pub fn assert(&self, value: &JsonValue) -> Result<AssertionResult> {
 		let inner = self.inner();
 		if let Some(skip) = inner.skip {
@@ -75,7 +75,7 @@ impl Assertion {
 		}
 	}
 
-	fn inner(&self) -> Box<RequestAssertion<dyn Assert>> {
+	fn inner(&self) -> Box<RequestAssertionConfig<dyn Assert>> {
 		match self {
 			Self::Between(assertion) => Box::new(assertion.clone()),
 			Self::Equal(assertion) => Box::new(assertion.clone()),
@@ -94,7 +94,7 @@ impl Assertion {
 	}
 }
 
-impl fmt::Display for Assertion {
+impl fmt::Display for AssertionConfig {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match &self {
 			Self::Between(assertion) => assertion.fmt(f),
@@ -145,7 +145,7 @@ fn value_to_string(value: &YamlValue) -> String {
 	}
 }
 
-impl fmt::Display for RequestAssertion<Between> {
+impl fmt::Display for RequestAssertionConfig<Between> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
@@ -172,7 +172,7 @@ impl Assert for Equal {
 	}
 }
 
-impl fmt::Display for RequestAssertion<Equal> {
+impl fmt::Display for RequestAssertionConfig<Equal> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "equals {}", value_to_string(&self.assertion.value))
 	}
@@ -195,7 +195,7 @@ impl Assert for GreaterThan {
 	}
 }
 
-impl fmt::Display for RequestAssertion<GreaterThan> {
+impl fmt::Display for RequestAssertionConfig<GreaterThan> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
@@ -227,7 +227,7 @@ impl Assert for LessThan {
 	}
 }
 
-impl fmt::Display for RequestAssertion<LessThan> {
+impl fmt::Display for RequestAssertionConfig<LessThan> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
@@ -245,7 +245,7 @@ impl fmt::Display for RequestAssertion<LessThan> {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Length {
 	#[serde(rename = "assertion")]
-	pub inner: Box<Assertion>,
+	pub inner: Box<AssertionConfig>,
 }
 
 impl Assert for Length {
@@ -263,7 +263,7 @@ impl Assert for Length {
 	}
 }
 
-impl fmt::Display for RequestAssertion<Length> {
+impl fmt::Display for RequestAssertionConfig<Length> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "length ")?;
 		self.assertion.inner.fmt(f)
@@ -281,7 +281,7 @@ impl Assert for NotEqual {
 	}
 }
 
-impl fmt::Display for RequestAssertion<NotEqual> {
+impl fmt::Display for RequestAssertionConfig<NotEqual> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "not equals {}", value_to_string(&self.assertion.value))
 	}
@@ -308,7 +308,7 @@ impl Assert for Contains {
 	}
 }
 
-impl fmt::Display for RequestAssertion<Contains> {
+impl fmt::Display for RequestAssertionConfig<Contains> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "contains {}", value_to_string(&self.assertion.value))
 	}
@@ -328,7 +328,7 @@ impl Assert for Exists {
 	}
 }
 
-impl fmt::Display for RequestAssertion<Exists> {
+impl fmt::Display for RequestAssertionConfig<Exists> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "exists {}", value_to_string(&self.assertion.value))
 	}

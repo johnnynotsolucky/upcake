@@ -11,11 +11,11 @@ trait Assert {
 #[derive(Deserialize, Debug, Clone)]
 pub struct RequestAssertion<T: ?Sized> {
 	#[serde(default)]
-	skip: Option<String>,
+	pub skip: Option<String>,
 	#[serde(default)]
-	path: String,
+	pub path: String,
 	#[serde(flatten)]
-	assertion: T,
+	pub assertion: T,
 }
 
 #[derive(Debug, Clone)]

@@ -5,7 +5,6 @@
 ```yaml
 - request: "GET"
   url: "https://httpbin.org/get"
-  connect_timeout: 10
   assertions:
     - type: equal
       path: ."response_code"
@@ -13,7 +12,6 @@
 
 - request: "GET"
   url: "https://httpbin.org/status/204"
-  connect_timeout: 10
   assertions:
     - type: equal
       path: ."response_code"

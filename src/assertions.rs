@@ -4,12 +4,12 @@ use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::fmt;
 
-trait Assert {
+pub trait Assert {
 	fn assert(&self, result: &YamlValue) -> bool;
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct RequestAssertionConfig<T: ?Sized> {
+pub struct RequestAssertionConfig<T: Assert + ?Sized> {
 	#[serde(default)]
 	pub skip: Option<String>,
 	#[serde(default)]
@@ -44,15 +44,13 @@ pub enum AssertionConfig {
 	GreaterThan(RequestAssertionConfig<GreaterThan>),
 	#[serde(rename = "less-than")]
 	LessThan(RequestAssertionConfig<LessThan>),
-	#[serde(skip_deserializing)]
-	ErrorAssertion,
 }
 
 impl AssertionConfig {
 	pub fn assert(&self, value: &JsonValue) -> Result<AssertionResult> {
 		let inner = self.inner();
-		if let Some(skip) = inner.skip {
-			Ok(AssertionResult::Skip(self.clone(), skip))
+		if let Some(ref skip) = inner.skip {
+			Ok(AssertionResult::Skip(self.clone(), skip.clone()))
 		} else if let Ok(found_value) = jql::walker(value, Some(&inner.path)) {
 			let result = serde_yaml::to_value(&found_value)?;
 			let assertion_result = inner.assertion.assert(&result);
@@ -75,17 +73,16 @@ impl AssertionConfig {
 		}
 	}
 
-	fn inner(&self) -> Box<RequestAssertionConfig<dyn Assert>> {
+	fn inner(&self) -> &RequestAssertionConfig<dyn Assert> {
 		match self {
-			Self::Between(assertion) => Box::new(assertion.clone()),
-			Self::Equal(assertion) => Box::new(assertion.clone()),
-			Self::NotEqual(assertion) => Box::new(assertion.clone()),
-			Self::Length(assertion) => Box::new(assertion.clone()),
-			Self::Contains(assertion) => Box::new(assertion.clone()),
-			Self::Exists(assertion) => Box::new(assertion.clone()),
-			Self::GreaterThan(assertion) => Box::new(assertion.clone()),
-			Self::LessThan(assertion) => Box::new(assertion.clone()),
-			_ => panic!("Invalid assertion configuration"),
+			Self::Between(assertion) => assertion,
+			Self::Equal(assertion) => assertion,
+			Self::NotEqual(assertion) => assertion,
+			Self::Length(assertion) => assertion,
+			Self::Contains(assertion) => assertion,
+			Self::Exists(assertion) => assertion,
+			Self::GreaterThan(assertion) => assertion,
+			Self::LessThan(assertion) => assertion,
 		}
 	}
 
@@ -105,7 +102,6 @@ impl fmt::Display for AssertionConfig {
 			Self::Exists(assertion) => assertion.fmt(f),
 			Self::GreaterThan(assertion) => assertion.fmt(f),
 			Self::LessThan(assertion) => assertion.fmt(f),
-			_ => panic!("Invalid assertion configuration"),
 		}
 	}
 }

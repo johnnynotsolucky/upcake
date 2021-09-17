@@ -183,7 +183,12 @@ fn run_request<T: Serialize>(
 	}
 }
 
-pub async fn upcake<T>(config: Config, requests: Vec<RequestConfig>, context: T, reporter: &mut dyn Reporter) -> Result<()>
+pub async fn upcake<T>(
+	config: Config,
+	requests: Vec<RequestConfig>,
+	context: T,
+	reporter: &mut dyn Reporter,
+) -> Result<()>
 where
 	T: Serialize + std::marker::Sync + std::marker::Send + 'static,
 {

@@ -3,12 +3,14 @@
 ## (Provisional) Example config
 
 ```yaml
-- request_method: "GET"
-  url: "https://httpbin.org/get"
-  assertions:
-    - type: equal
-      path: ."response_code"
-      value: 200
+# Default request_method: "GET"
+# Default assertions:
+#   assertions:
+#     - type: equal
+#       path: ."response_code"
+#       value: 204
+- url: "https://httpbin.org/get?some_query_param={{env.MY_QUERY_PARAM}}"
+
 
 - request_method: "GET"
   url: "https://httpbin.org/status/204"
@@ -21,8 +23,13 @@
   # summary: Test Httpbin.org POST
   url: "https://httpbin.org/post"
   headers:
-    - "Content-Type: application/json"
-  data: '{"foo": "bar"}'
+    "Content-Type": "application/json"
+    "Authorization": "Bearer {{env.AUTH_TOKEN}}"
+  data: |
+    {
+      "some": "json",
+      "data": "{{env.MY_ENV_VAR}}"
+    }
   assertions:
     - type: between
       path: ."response_code"

@@ -22,7 +22,7 @@ use reporters::Reporter;
 pub struct RequestConfig {
 	pub summary: Option<String>,
 	#[serde(default = "default_request_method")]
-	pub request: String,
+	pub request_method: String,
 	pub connect_timeout: Option<u64>,
 	pub data: Option<String>,
 	pub headers: Option<HashMap<String, String>>,
@@ -171,7 +171,7 @@ fn run_request<T: Serialize>(
 		verbose: config.verbose,
 		connect_timeout: config.connect_timeout.map(Duration::from_millis),
 
-		request: request_config.request.clone(),
+		request: request_config.request_method.clone(),
 		url,
 		data,
 		headers,
@@ -228,6 +228,7 @@ where
 					}
 				},
 				None => {
+					// TODO return an error which includes the request_config
 					reporter.bail(format!("{}", error));
 				}
 			},

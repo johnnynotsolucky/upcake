@@ -3,21 +3,21 @@
 ## (Provisional) Example config
 
 ```yaml
-- request: "GET"
+- request_method: "GET"
   url: "https://httpbin.org/get"
   assertions:
     - type: equal
       path: ."response_code"
       value: 200
 
-- request: "GET"
+- request_method: "GET"
   url: "https://httpbin.org/status/204"
   assertions:
     - type: equal
       path: ."response_code"
       value: 200
 
-- request: "POST"
+- request_method: "POST"
   # summary: Test Httpbin.org POST
   url: "https://httpbin.org/post"
   headers:

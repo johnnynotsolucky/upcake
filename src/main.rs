@@ -1,4 +1,7 @@
-use eyre::Result;
+use anyhow::Result;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::env;
 use std::fs;
 use structopt::StructOpt;
 
@@ -38,9 +41,17 @@ async fn main() -> Result<()> {
 		insecure: opt.insecure,
 		connect_timeout: opt.connect_timeout,
 		verbose: opt.verbose,
-		requests,
+	};
+
+	let context = Context {
+		env: env::vars().collect(),
 	};
 
 	let mut reporter = TapReporter::new();
-	upcake(config, &mut reporter).await
+	upcake(config, requests, context, &mut reporter).await
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct Context {
+	pub env: HashMap<String, String>,
 }

@@ -1,38 +1,48 @@
 pub mod assertions;
 pub mod reporters;
 
-use eyre::Result;
+use anyhow::Result;
 use futures::future;
+use handlebars::Handlebars;
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::str;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task;
 
-use assertions::{AssertionConfig, RequestAssertionConfig, Equal};
+use assertions::{AssertionConfig, Equal, RequestAssertionConfig};
 use reporters::Reporter;
 
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {
 	pub summary: Option<String>,
+	#[serde(default = "default_request_method")]
 	pub request: String,
 	pub connect_timeout: Option<u64>,
 	pub data: Option<String>,
-	pub headers: Option<Vec<String>>,
+	pub headers: Option<HashMap<String, String>>,
 	pub url: String,
-  #[serde(default = "default_assertions")]
+	#[serde(default = "default_assertions")]
 	pub assertions: Vec<AssertionConfig>,
 }
 
+pub fn default_request_method() -> String {
+	"GET".into()
+}
+
 pub fn default_assertions() -> Vec<AssertionConfig> {
-    vec![AssertionConfig::Equal(RequestAssertionConfig {
-        skip: None,
-        path: ".\"response_code\"".into(),
-        assertion: Equal { value: serde_yaml::to_value(200).unwrap() },
-    })]
+	vec![AssertionConfig::Equal(RequestAssertionConfig {
+		skip: None,
+		path: ".\"response_code\"".into(),
+		assertion: Equal {
+			value: serde_yaml::to_value(200).unwrap(),
+		},
+	})]
 }
 
 #[derive(Deserialize, Default, Debug, Clone)]
@@ -41,7 +51,6 @@ pub struct Config {
 	pub insecure: bool,
 	pub connect_timeout: Option<u64>,
 	pub verbose: bool,
-	pub requests: Vec<RequestConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -125,15 +134,37 @@ impl From<HttpstatResult> for StatResult {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum SomeError {
 	#[error("{0:?}")]
 	RequestError(RequestConfig, String),
 }
 
-fn run_request(
-	config: &Config,
+fn run_request<T: Serialize>(
+	config: Arc<Config>,
 	request_config: RequestConfig,
-) -> Result<(RequestConfig, StatResult), Error> {
+	context: Arc<T>,
+) -> Result<(RequestConfig, StatResult)> {
+	let handlebars = Handlebars::new();
+	let headers = match request_config.headers {
+		Some(ref headers) => {
+			let mut joined_headers: Vec<String> = Vec::new();
+
+			for (header, value) in headers {
+				let rendered_value = handlebars.render_template(value, &*context)?;
+				joined_headers.push(format!("{}: {}", header, rendered_value));
+			}
+
+			Some(joined_headers)
+		}
+		None => None,
+	};
+
+	let url = handlebars.render_template(&request_config.url, &*context)?;
+	let data = match request_config.data {
+		Some(ref data) => Some(handlebars.render_template(data, &*context)?),
+		None => None,
+	};
+
 	let httpstat_config = HttpstatConfig {
 		location: config.location,
 		insecure: config.insecure,
@@ -141,35 +172,38 @@ fn run_request(
 		connect_timeout: config.connect_timeout.map(Duration::from_millis),
 
 		request: request_config.request.clone(),
-		url: request_config.url.clone(),
-		data: request_config.data.clone(),
-		headers: request_config.headers.clone(),
+		url,
+		data,
+		headers,
 	};
 
 	match httpstat(&httpstat_config) {
-		Ok(httpstat_result) => {
-			// println!("req: {:?}", &httpstat_result);
-			Ok((request_config, httpstat_result.into()))
-		}
-		Err(error) => Err(Error::RequestError(request_config, error.to_string())),
+		Ok(httpstat_result) => Ok((request_config, httpstat_result.into())),
+		Err(error) => Err(SomeError::RequestError(request_config, error.to_string()).into()),
 	}
 }
 
-pub async fn upcake(config: Config, reporter: &mut dyn Reporter) -> Result<()> {
-	let mut requests = Vec::new();
+pub async fn upcake<T>(config: Config, requests: Vec<RequestConfig>, context: T, reporter: &mut dyn Reporter) -> Result<()>
+where
+	T: Serialize + std::marker::Sync + std::marker::Send + 'static,
+{
+	let context = Arc::new(context);
+	let config = Arc::new(config);
+	let mut request_futures = Vec::new();
 
-	for request_config in &config.requests {
+	for request_config in requests {
+		let context = context.clone();
 		let config = config.clone();
-		let request_config = request_config.clone();
+		// let request_config = request_config.clone();
 
-		requests.push(task::spawn_blocking(move || {
-			run_request(&config, request_config)
+		request_futures.push(task::spawn_blocking(|| {
+			run_request(config, request_config, context)
 		}))
 	}
 
 	reporter.start();
 
-	let results = future::join_all(requests).await;
+	let results = future::join_all(request_futures).await;
 
 	for result in results {
 		match result? {
@@ -181,10 +215,17 @@ pub async fn upcake(config: Config, reporter: &mut dyn Reporter) -> Result<()> {
 					reporter.step_result(assertion.assert(&json_result)?);
 				}
 			}
-			Err(Error::RequestError(request_config, error)) => {
-				reporter.step_suite(&request_config);
-				reporter.bail(error);
-			}
+			Err(error) => match error.downcast_ref::<SomeError>() {
+				Some(error) => match error {
+					SomeError::RequestError(request_config, error) => {
+						reporter.step_suite(request_config);
+						reporter.bail(error.to_string());
+					}
+				},
+				None => {
+					reporter.bail(format!("{}", error));
+				}
+			},
 		}
 	}
 

@@ -30,7 +30,7 @@ impl Reporter for TapReporter {
 	}
 
 	fn step_suite(&mut self, request_config: &RequestConfig) {
-		if let Some(summary) = &request_config.summary {
+		if let Some(ref summary) = request_config.summary {
 			println!("#\n# {}\n#", summary);
 		} else {
 			println!("#\n# {} {}\n#", request_config.request, request_config.url);

@@ -1,4 +1,14 @@
-# 🧁 Upcake
+<h1 align="center">
+  🧁 Upcake
+</h1>
+
+<p align="center">
+  <em>Cupcakes for your API</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/johnnynotsolucky/upcake/actions/workflows/build.yaml"><img src="https://github.com/johnnynotsolucky/upcake/actions/workflows/build.yaml/badge.svg" /></a>
+</p>
 
 ## (Provisional) Example config
 

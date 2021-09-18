@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::fmt;
 
@@ -20,8 +19,8 @@ pub struct RequestAssertionConfig<T: Assert + ?Sized> {
 
 #[derive(Debug, Clone)]
 pub enum AssertionResult {
-	Success(AssertionConfig, JsonValue),
-	Failure(AssertionConfig, Option<JsonValue>, Option<String>),
+	Success(AssertionConfig, YamlValue),
+	Failure(AssertionConfig, Option<YamlValue>, Option<String>),
 	Skip(AssertionConfig, String),
 }
 
@@ -47,20 +46,25 @@ pub enum AssertionConfig {
 }
 
 impl AssertionConfig {
-	pub fn assert(&self, value: &JsonValue) -> Result<AssertionResult> {
+	pub fn assert(&self, value: &YamlValue) -> Result<AssertionResult> {
 		let inner = self.inner();
 		if let Some(ref skip) = inner.skip {
 			Ok(AssertionResult::Skip(self.clone(), skip.clone()))
-		} else if let Ok(found_value) = jql::walker(value, Some(&inner.path)) {
+		} else if let Ok(found_value) =
+			jql::walker(&serde_json::to_value(value)?, Some(&inner.path))
+		{
 			let result = serde_yaml::to_value(&found_value)?;
 			let assertion_result = inner.assertion.assert(&result);
 
 			if assertion_result {
-				Ok(AssertionResult::Success(self.clone(), found_value))
+				Ok(AssertionResult::Success(
+					self.clone(),
+					serde_yaml::to_value(found_value)?,
+				))
 			} else {
 				Ok(AssertionResult::Failure(
 					self.clone(),
-					Some(found_value),
+					Some(serde_yaml::to_value(found_value)?),
 					None,
 				))
 			}
@@ -327,5 +331,580 @@ impl Assert for Exists {
 impl fmt::Display for RequestAssertionConfig<Exists> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "exists {}", value_to_string(&self.assertion.value))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use crate::assertions::{
+		Assert, Between, Contains, Equal, Exists, GreaterThan, Length, LessThan,
+	};
+	use anyhow::Result;
+	use serde::Serialize;
+	use serde_yaml::Value as YamlValue;
+
+	#[derive(Serialize)]
+	struct Mapping {
+		value_a: usize,
+		value_b: String,
+	}
+
+	fn as_value<T: Serialize>(v: T) -> YamlValue {
+		serde_yaml::to_value(v).unwrap()
+	}
+
+	#[test]
+	fn assert_between_is_between_exclusive() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value(1),
+				as_value(3),
+				as_value(2),
+				"2 is between 1 and 3, exclusive",
+			),
+			(
+				as_value(0),
+				as_value(100),
+				as_value(20),
+				"20 is between 0 and 100, exclusive",
+			),
+			(
+				as_value(-100),
+				as_value(100),
+				as_value(0),
+				"0 is between -100 and 100, exclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(0.2),
+				"0.2 is between 0.0 and 1.0, exclusive",
+			),
+		];
+
+		for (min, max, value, msg) in test_cases {
+			let min = serde_yaml::to_value(min)?;
+			let max = serde_yaml::to_value(max)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Between {
+				min,
+				max,
+				inclusive: false,
+			};
+			assert!(assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_between_is_not_between_exclusive() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value(1),
+				as_value(3),
+				as_value(1),
+				"1 is not between 1 and 3, exclusive",
+			),
+			(
+				as_value(0),
+				as_value(100),
+				as_value(120),
+				"120 is not between 0 and 100, exclusive",
+			),
+			(
+				as_value(0),
+				as_value(100),
+				as_value(-1),
+				"-1 is not between 0 and 100, exclusive",
+			),
+			(
+				as_value(1),
+				as_value(2),
+				as_value(2),
+				"2 is not between 1 and 2, exclusive",
+			),
+			(
+				as_value(1),
+				as_value(1),
+				as_value(1),
+				"1 is not between 1 and 1, exclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(0.0),
+				"0.0 is not between 0.0 and 1.0, exclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(1.1),
+				"1.1 is not between 0.0 and 1.0, exclusive",
+			),
+		];
+
+		for (min, max, value, msg) in test_cases {
+			let min = serde_yaml::to_value(min)?;
+			let max = serde_yaml::to_value(max)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Between {
+				min,
+				max,
+				inclusive: false,
+			};
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_between_is_between_inclusive() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value(1),
+				as_value(3),
+				as_value(2),
+				"2 is between 1 and 3, inclusive",
+			),
+			(
+				as_value(0),
+				as_value(100),
+				as_value(20),
+				"20 is between 0 and 100, inclusive",
+			),
+			(
+				as_value(-100),
+				as_value(100),
+				as_value(0),
+				"0 is between -100 and 100, inclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(0.2),
+				"0.2 is between 0.0 and 1.0, inclusive",
+			),
+			(
+				as_value(1),
+				as_value(3),
+				as_value(1),
+				"1 is between 1 and 3, inclusive",
+			),
+			(
+				as_value(1),
+				as_value(2),
+				as_value(2),
+				"2 is between 1 and 2, inclusive",
+			),
+			(
+				as_value(1),
+				as_value(1),
+				as_value(1),
+				"1 is between 1 and 1, inclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(0.0),
+				"0.0 is between 0.0 and 1.0, inclusive",
+			),
+		];
+
+		for (min, max, value, msg) in test_cases {
+			let min = serde_yaml::to_value(min)?;
+			let max = serde_yaml::to_value(max)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Between {
+				min,
+				max,
+				inclusive: true,
+			};
+			assert!(assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_between_is_not_between_inclusive() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value(0),
+				as_value(100),
+				as_value(120),
+				"120 is not between 0 and 100, inclusive",
+			),
+			(
+				as_value(0),
+				as_value(100),
+				as_value(-1),
+				"-1 is not between 0 and 100, inclusive",
+			),
+			(
+				as_value(0.0),
+				as_value(1.0),
+				as_value(1.1),
+				"1.1 is not between 0.0 and 1.0, inclusive",
+			),
+			(
+				as_value(-1.0),
+				as_value(1.0),
+				as_value(-1.1),
+				"-1.1 is not between -1.0 and 1.0, inclusive",
+			),
+		];
+
+		for (min, max, value, msg) in test_cases {
+			let min = serde_yaml::to_value(min)?;
+			let max = serde_yaml::to_value(max)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Between {
+				min,
+				max,
+				inclusive: false,
+			};
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_equal_is_equal() -> Result<()> {
+		let test_cases = vec![
+			(as_value(1), as_value(1), "1 equal 1"),
+			(as_value(true), as_value(true), "true equal true"),
+			(as_value('a'), as_value('a'), "'a' equal 'a'"),
+			(
+				as_value("string"),
+				as_value("string"),
+				"\"string\" (&str) equal \"string\" (&str)",
+			),
+			(
+				as_value(Some(1)),
+				as_value(Some(1)),
+				"Some(1) equal Some(1)",
+			),
+			(
+				as_value(None as Option<bool>),
+				as_value(None as Option<bool>),
+				"None equal None",
+			),
+			(as_value(1.1), as_value(1.1), "1.1 equal 1.1"),
+			(
+				as_value("string".to_string()),
+				as_value("string".to_string()),
+				"\"string\" (String) equal \"string\" (String)",
+			),
+			(
+				as_value(vec![1, 2, 3]),
+				as_value(vec![1, 2, 3]),
+				"[1, 2, 3] equal [1, 2, 3]",
+			),
+			(
+				as_value(vec!["a", "b", "c"]),
+				as_value(vec!["a", "b", "c"]),
+				"[\"a\", \"b\", \"c\"] (Vec<&str>) equal [\"a\", \"b\", \"c\"] (Vec<&str>)",
+			),
+			(
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				"[\"a\", \"b\", \"c\"] (Vec<String>) equal [\"a\", \"b\", \"c\"] (Vec<String>)",
+			),
+			(
+				as_value(vec!['a', 'b', 'c']),
+				as_value(vec!['a', 'b', 'c']),
+				"['a', 'b', 'c'] (Vec<char>) equal ['a', 'b', 'c'] (Vec<char>)",
+			),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				"{\"value_a\": 1, \"value_b\": \"String\"} equal {\"value_a\": 1, \"value_b\": \"String\"}",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Equal { value: expected };
+			assert!(assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_equal_is_not_equal() -> Result<()> {
+		let test_cases = vec![
+			(as_value(1), as_value(2), "1 not equal 2"),
+			(as_value(true), as_value(false), "true not equal false"),
+			(as_value('a'), as_value('b'), "'a' not equal 'b'"),
+			(
+				as_value("string"),
+				as_value("gnirts"),
+				"\"string\" (&str) not equal \"gnirts\" (&str)",
+			),
+			(
+				as_value(Some(1)),
+				as_value(Some(2)),
+				"Some(1) not equal Some(2)",
+			),
+			(
+				as_value(None as Option<bool>),
+				as_value(Some(true)),
+				"None not equal Some(true)",
+			),
+			(as_value(1.1), as_value(1.2), "1.1 not equal 1.2"),
+			(
+				as_value("string".to_string()),
+				as_value("gnirts".to_string()),
+				"\"string\" (String) not equal \"gnirts\" (String)",
+			),
+			(
+				as_value(vec![1, 2, 3]),
+				as_value(vec![3, 2, 1]),
+				"[1, 2, 3] not equal [3, 2, 1]",
+			),
+			(
+				as_value(vec!["a", "b", "c"]),
+				as_value(vec!["c", "b", "a"]),
+				"[\"a\", \"b\", \"c\"] (Vec<&str>) not equal [\"c\", \"b\", \"a\"] (Vec<&str>)",
+			),
+			(
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				as_value(vec!["c".to_string(), "b".to_string(), "a".to_string()]),
+				"[\"a\", \"b\", \"c\"] (Vec<String>) not equal [\"c\", \"b\", \"a\"] (Vec<String>)",
+			),
+			(
+				as_value(vec!['a', 'b', 'c']),
+				as_value(vec!['c', 'b', 'a']),
+				"['a', 'b', 'c'] (Vec<char>) not equal ['c', 'b', 'a'] (Vec<char>)",
+			),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(Mapping { value_a: 2, value_b: "Gnirts".into() }),
+				"{\"value_a\": 1, \"value_b\": \"String\"} not equal {\"value_a\": 2, \"value_b\": \"Gnirts\"}",
+			),
+			(as_value(1), as_value(1.0), "1 not equal 1.0"),
+			(as_value(true), as_value("true"), "true not equal \"true\""),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(vec![1, 2]),
+				"{\"value_a\": 1, \"value_b\": \"String\"} not equal [1, 2]",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Equal { value: expected };
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_contains_contains_value() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value("string"),
+				as_value("string"),
+				"\"string\" contains \"string\"",
+			),
+			(
+				as_value("s"),
+				as_value("string"),
+				"\"string\" contains \"s\"",
+			),
+			(
+				as_value("tri"),
+				as_value("string"),
+				"\"string\" contains \"tri\"",
+			),
+			(
+				as_value("ing"),
+				as_value("ing"),
+				"\"string\" contains \"ing\"",
+			),
+			(
+				as_value(vec![2, 3]),
+				as_value(vec![vec![], vec![2, 3], vec![]]),
+				"[[], [2, 3], []] contains [2, 3]",
+			),
+			(as_value(2), as_value(vec![1, 2, 3]), "[1, 2, 3] contains 2"),
+			(
+				as_value(0.0),
+				as_value(vec![0.0, 1.0, 2.0]),
+				"[0.0, 1.0, 2.0] contains 0.0",
+			),
+			(as_value(0), as_value(vec![0]), "[0] contains 0"),
+			(
+				as_value(2.0),
+				as_value(vec![0.0, 1.0, 2.0]),
+				"[0.0, 1.0, 2.0] contains 2.0",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Contains { value: expected };
+			assert!(assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_contains_does_not_contain_value() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value("gnirts"),
+				as_value("string"),
+				"\"string\" does not contain \"gnirts\"",
+			),
+			(
+				as_value("a"),
+				as_value("string"),
+				"\"string\" does not contain \"a\"",
+			),
+			(
+				as_value(vec![2, 3]),
+				as_value(vec![vec![], vec![1, 4], vec![]]),
+				"[[], [1, 4], []] does not contain [2, 3]",
+			),
+			(
+				as_value(4),
+				as_value(vec![1, 2, 3]),
+				"[1, 2, 3] does not contain 4",
+			),
+			(
+				as_value(-1.0),
+				as_value(vec![0.0, 1.0, 2.0]),
+				"[0.0, 1.0, 2.0] does not contain -1.0",
+			),
+			(as_value(1), as_value(vec![0]), "[0] does not contain 1"),
+			(
+				as_value(2),
+				as_value(vec![0.0, 1.0, 2.0]),
+				"[0.0, 1.0, 2.0] does not contain 2",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Contains { value: expected };
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_exists_key_exists() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value("value_a"),
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
+				"\"value_a\" exists in {\"value_a\": 1}",
+			),
+			(
+				as_value("value_a"),
+				serde_yaml::from_str::<YamlValue>(
+					"---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"",
+				)?,
+				"\"value_a\" exists in {\"value_a\": \"value_a\", \"value_b\": \"value_b\"}",
+			),
+		];
+
+		for (key, value, msg) in test_cases {
+			let key = serde_yaml::to_value(key)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Exists { value: key };
+			assert!(assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_exists_key_does_not_exist() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value("value_c"),
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
+				"\"value_a\" exists in {\"value_a\": 1}",
+			),
+			(
+				as_value("value_d"),
+				serde_yaml::from_str::<YamlValue>(
+					"---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"",
+				)?,
+				"\"value_a\" exists in {\"value_a\": \"value_a\", \"value_b\": \"value_b\"}",
+			),
+			(
+				as_value("value_a"),
+				as_value(vec!["value_a", "value_b"]),
+				"\"value_a\" exists in [\"value_a\", \"value_b\"]",
+			),
+		];
+
+		for (key, value, msg) in test_cases {
+			let key = serde_yaml::to_value(key)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Exists { value: key };
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_greater_than_is_gt_exclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_greater_than_is_not_gt_exclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_greater_than_is_gt_inclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_greater_than_is_not_gt_inclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_less_than_is_lt_exclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_less_than_is_not_lt_exclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_less_than_is_lt_inclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_less_than_is_not_lt_inclusive() -> Result<()> {
+		todo!()
+	}
+
+	#[test]
+	fn assert_length_() -> Result<()> {
+		todo!()
 	}
 }

@@ -33,7 +33,10 @@ impl Reporter for TapReporter {
 		if let Some(ref summary) = request_config.summary {
 			println!("#\n# {}\n#", summary);
 		} else {
-			println!("#\n# {} {}\n#", request_config.request_method, request_config.url);
+			println!(
+				"#\n# {} {}\n#",
+				request_config.request_method, request_config.url
+			);
 		}
 	}
 

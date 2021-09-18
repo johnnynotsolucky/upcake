@@ -214,10 +214,10 @@ where
 		match result? {
 			Ok((request_config, stat_result)) => {
 				reporter.step_suite(&request_config);
-				let json_result = serde_json::to_value(&stat_result)?;
+				let result = serde_yaml::to_value(&stat_result)?;
 
 				for assertion in request_config.assertions.iter() {
-					reporter.step_result(assertion.assert(&json_result)?);
+					reporter.step_result(assertion.assert(&result)?);
 				}
 			}
 			Err(error) => match error.downcast_ref::<SomeError>() {

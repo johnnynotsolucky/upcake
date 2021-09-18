@@ -1,4 +1,4 @@
-# Upcake
+# 🧁 Upcake
 
 ## (Provisional) Example config
 

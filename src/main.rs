@@ -27,7 +27,7 @@ struct Opt {
 	/// Verbose output
 	verbose: bool,
 
-	#[structopt(name="bytes", short = "s", long = "max-response-size")]
+	#[structopt(name = "bytes", short = "s", long = "max-response-size")]
 	/// Maximum response size in bytes
 	max_response_size: Option<usize>,
 
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
 		insecure: opt.insecure,
 		connect_timeout: opt.connect_timeout,
 		verbose: opt.verbose,
-		max_response_size: opt.max_response_size
+		max_response_size: opt.max_response_size,
 	};
 
 	let context = Context {

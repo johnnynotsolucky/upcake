@@ -21,6 +21,9 @@
 #       value: 204
 - url: "https://httpbin.org/get?some_query_param={{env.MY_QUERY_PARAM}}"
 
+- request_method: "POST"
+  url: "https://httpbin.org/post"
+  data: "@data.json"
 
 - request_method: "GET"
   url: "https://httpbin.org/status/204"
@@ -78,6 +81,8 @@
         type: equal
         value: 7
 ```
+
+## (Provisional) Example output
 
 ```bash
 $ upcake ./cupcakes.yaml

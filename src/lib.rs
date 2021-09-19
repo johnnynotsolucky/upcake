@@ -23,7 +23,6 @@ pub struct RequestConfig {
 	pub summary: Option<String>,
 	#[serde(default = "default_request_method")]
 	pub request_method: String,
-	pub connect_timeout: Option<u64>,
 	pub data: Option<String>,
 	pub headers: Option<HashMap<String, String>>,
 	pub url: String,
@@ -51,6 +50,7 @@ pub struct Config {
 	pub insecure: bool,
 	pub connect_timeout: Option<u64>,
 	pub verbose: bool,
+	pub max_response_size: Option<usize>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -134,7 +134,7 @@ impl From<HttpstatResult> for StatResult {
 }
 
 #[derive(Debug, Error)]
-pub enum SomeError {
+pub enum Error {
 	#[error("{0:?}")]
 	RequestError(RequestConfig, String),
 }
@@ -170,6 +170,7 @@ fn run_request<T: Serialize>(
 		insecure: config.insecure,
 		verbose: config.verbose,
 		connect_timeout: config.connect_timeout.map(Duration::from_millis),
+		max_response_size: config.max_response_size,
 
 		request: request_config.request_method.clone(),
 		url,
@@ -179,7 +180,7 @@ fn run_request<T: Serialize>(
 
 	match httpstat(&httpstat_config) {
 		Ok(httpstat_result) => Ok((request_config, httpstat_result.into())),
-		Err(error) => Err(SomeError::RequestError(request_config, error.to_string()).into()),
+		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
 	}
 }
 
@@ -220,16 +221,18 @@ where
 					reporter.step_result(assertion.assert(&result)?);
 				}
 			}
-			Err(error) => match error.downcast_ref::<SomeError>() {
+			Err(error) => match error.downcast_ref::<Error>() {
 				Some(error) => match error {
-					SomeError::RequestError(request_config, error) => {
+					Error::RequestError(request_config, error) => {
 						reporter.step_suite(request_config);
 						reporter.bail(error.to_string());
+						break;
 					}
 				},
 				None => {
 					// TODO return an error which includes the request_config
 					reporter.bail(format!("{}", error));
+					break;
 				}
 			},
 		}

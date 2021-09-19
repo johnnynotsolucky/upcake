@@ -30,6 +30,10 @@ impl Reporter for TapReporter {
 	}
 
 	fn step_suite(&mut self, request_config: &RequestConfig) {
+		if self.bailed {
+			return;
+		}
+
 		if let Some(ref summary) = request_config.summary {
 			println!("#\n# {}\n#", summary);
 		} else {
@@ -41,6 +45,10 @@ impl Reporter for TapReporter {
 	}
 
 	fn step_result(&mut self, result: AssertionResult) {
+		if self.bailed {
+			return;
+		}
+
 		self.assertion_count += 1;
 
 		match result {
@@ -89,6 +97,10 @@ impl Reporter for TapReporter {
 	}
 
 	fn end(&mut self) {
+		if self.bailed {
+			return;
+		}
+
 		println!("1..{}", self.assertion_count);
 	}
 }

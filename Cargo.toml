@@ -19,9 +19,8 @@ tokio = { version = "1.11", features = ["full"] }
 toml = "0.5"
 
 [features]
-default = ["httpstat/mesalink", "httpstat/http2"]
+default = ["ssl", "http2"]
 ssl = ["httpstat/ssl"]
-mesalink = ["httpstat/mesalink"]
 http2 = ["httpstat/http2"]
 static-ssl = ["httpstat/static-ssl"]
 static-curl = ["httpstat/static-curl"]

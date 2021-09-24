@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::executor::block_on;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env;
@@ -35,8 +36,7 @@ struct Opt {
 	config: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
 	let opt = Opt::from_args();
 	let requests: Vec<RequestConfig> = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
 
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
 	};
 
 	let mut reporter = TapReporter::new();
-	upcake(config, requests, context, &mut reporter).await
+	block_on(upcake(config, requests, context, &mut reporter))
 }
 
 #[derive(Serialize, Debug, Clone)]

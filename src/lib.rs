@@ -13,7 +13,6 @@ use std::str;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::task;
 
 use assertions::{AssertionConfig, Equal, RequestAssertionConfig};
 use reporters::Reporter;
@@ -108,25 +107,11 @@ impl From<HttpstatResult> for StatResult {
 		};
 
 		if let Ok(body) = str::from_utf8(&result.body[..]) {
-			let mut in_content = false;
-			let lines: Vec<&str> = body
-				.lines()
-				.filter(|line| {
-					if line.is_empty() && !in_content {
-						in_content = true;
-						return false; // Don't include this line though.
-					}
-
-					in_content
-				})
-				.collect();
-			let content = lines.join("\n");
-
-			if let Ok(json_content) = serde_json::from_str(&content) {
-				stat_result.json = json_content;
+			if let Ok(json_content) = serde_json::from_str(body) {
+				stat_result.json = Some(json_content);
 			}
 
-			stat_result.body = content.into();
+			stat_result.body = Some(body.into());
 		}
 
 		stat_result
@@ -139,7 +124,7 @@ pub enum Error {
 	RequestError(RequestConfig, String),
 }
 
-fn run_request<T: Serialize>(
+async fn run_request<T: Serialize>(
 	config: Arc<Config>,
 	request_config: RequestConfig,
 	context: Arc<T>,
@@ -178,7 +163,7 @@ fn run_request<T: Serialize>(
 		headers,
 	};
 
-	match httpstat(&httpstat_config) {
+	match httpstat(&httpstat_config).await {
 		Ok(httpstat_result) => Ok((request_config, httpstat_result.into())),
 		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
 	}
@@ -202,9 +187,7 @@ where
 		let config = config.clone();
 		// let request_config = request_config.clone();
 
-		request_futures.push(task::spawn_blocking(|| {
-			run_request(config, request_config, context)
-		}))
+		request_futures.push(run_request(config, request_config, context))
 	}
 
 	reporter.start();
@@ -212,7 +195,7 @@ where
 	let results = future::join_all(request_futures).await;
 
 	for result in results {
-		match result? {
+		match result {
 			Ok((request_config, stat_result)) => {
 				reporter.step_suite(&request_config);
 				let result = serde_yaml::to_value(&stat_result)?;

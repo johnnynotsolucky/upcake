@@ -10,6 +10,21 @@ pub trait Reporter {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct NoopReporter;
+
+impl Reporter for NoopReporter {
+	fn start(&mut self) {}
+
+	fn step_suite(&mut self, _request_config: &RequestConfig) {}
+
+	fn step_result(&mut self, _result: AssertionResult) {}
+
+	fn bail(&mut self, _reason: String) {}
+
+	fn end(&mut self) {}
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct TapReporter {
 	assertion_count: usize,
 	bailed: bool,

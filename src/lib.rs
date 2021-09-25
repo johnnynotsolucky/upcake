@@ -2,15 +2,17 @@ pub mod assertions;
 pub mod reporters;
 
 use anyhow::Result;
-use futures::future;
 use handlebars::Handlebars;
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::str;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -169,6 +171,66 @@ async fn run_request<T: Serialize>(
 	}
 }
 
+enum State<F, T>
+where
+	F: Future<Output = Result<T>>,
+{
+	Future(F),
+	Ok(Result<T>),
+}
+
+struct TryJoinAll<F, T>(Vec<State<F, T>>)
+where
+	F: Future<Output = Result<T>>;
+
+impl<F, T> Future for TryJoinAll<F, T>
+where
+	F: Future<Output = Result<T>>,
+{
+	type Output = Result<Vec<Result<T>>>;
+
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		let this = unsafe { self.get_unchecked_mut() };
+		let states = &mut this.0;
+
+		let mut all_ready = true;
+
+		for state in states.iter_mut() {
+			if let State::Future(future) = state {
+				match unsafe { Pin::new_unchecked(future) }.poll(context) {
+					Poll::Ready(result) => *state = State::Ok(result),
+					Poll::Pending => {
+						all_ready = false;
+						continue;
+					}
+				}
+			}
+		}
+
+		if all_ready {
+			let states = std::mem::take(states);
+			let results = states
+				.into_iter()
+				.map(|state| match state {
+					State::Ok(result) => result,
+					_ => unreachable!(),
+				})
+				.collect();
+
+			Poll::Ready(Ok(results))
+		} else {
+			Poll::Pending
+		}
+	}
+}
+
+fn try_join_all<F, T>(futures: Vec<F>) -> impl Future<Output = Result<Vec<Result<T>>>>
+where
+	F: Future<Output = Result<T>>,
+{
+	TryJoinAll(futures.into_iter().map(State::Future).collect())
+}
+
 pub async fn upcake<T>(
 	config: Config,
 	requests: Vec<RequestConfig>,
@@ -185,14 +247,13 @@ where
 	for request_config in requests {
 		let context = context.clone();
 		let config = config.clone();
-		// let request_config = request_config.clone();
 
 		request_futures.push(run_request(config, request_config, context))
 	}
 
 	reporter.start();
 
-	let results = future::join_all(request_futures).await;
+	let results = try_join_all(request_futures).await?;
 
 	for result in results {
 		match result {

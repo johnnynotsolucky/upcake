@@ -33,7 +33,7 @@
       value: 200
 
 - request_method: "POST"
-  # summary: Test Httpbin.org POST
+  # name: Test Httpbin.org POST
   url: "https://httpbin.org/post"
   headers:
     "Content-Type": "application/json"

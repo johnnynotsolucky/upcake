@@ -19,55 +19,84 @@ use thiserror::Error;
 use assertions::{AssertionConfig, Equal, RequestAssertionConfig};
 use reporters::Reporter;
 
+/// Configuration for individual requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {
-	pub summary: Option<String>,
+	/// Name of the request
+	pub name: Option<String>,
+	/// Specify the request command to use, i.e. "GET"
 	#[serde(default = "default_request_method")]
 	pub request_method: String,
+	/// Data to pass with the request.
+	///
+	/// Contents are rendered with Handlebars.
+	///
+	/// Send the contents of a file by prefixing with an @: `"@/path/to/file.json"`
 	pub data: Option<String>,
+	/// Key/Value pairs of headers to send with the request
 	pub headers: Option<HashMap<String, String>>,
+	/// The url to request
 	pub url: String,
+	/// A list of assertions to perform on the response
 	#[serde(default = "default_assertions")]
 	pub assertions: Vec<AssertionConfig>,
 }
 
-pub fn default_request_method() -> String {
+pub(crate) fn default_request_method() -> String {
 	"GET".into()
 }
 
-pub fn default_assertions() -> Vec<AssertionConfig> {
+pub(crate) fn default_assertions() -> Vec<AssertionConfig> {
 	vec![AssertionConfig::Equal(RequestAssertionConfig {
 		skip: None,
 		path: ".\"response_code\"".into(),
-		assertion: Equal {
-			value: serde_yaml::to_value(200).unwrap(),
-		},
+		assertion: Equal(serde_yaml::to_value(200).unwrap()),
 	})]
 }
 
+/// Configuration applied to all requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config {
+	/// Follow redirects
 	pub location: bool,
+	/// Allow insecure server connections when using SSL
 	pub insecure: bool,
+	/// Maximum time allowed for connection
 	pub connect_timeout: Option<u64>,
+	/// Verbose output
 	pub verbose: bool,
+	/// Maximum response size in bytes
 	pub max_response_size: Option<usize>,
 }
 
+/// Timing results for a request
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Timing {
+	/// Duration in milliseconds from the start of the request until name lookup resolved
 	pub namelookup_time: u64,
+	/// Duration in milliseconds from the start of the request until a connection to the remote
+	/// host is established
 	pub connect_time: u64,
+	/// Duration in milliseconds from the start of the request until file transfer was about to
+	/// begin
 	pub pretransfer_time: u64,
+	/// Duration in milliseconds from the start of the request until the first byte was received
 	pub starttransfer_time: u64,
+	/// Duration in milliseconds from the start of the request until the request ended
 	pub total_time: u64,
+	/// Same as [`Timing::namelookup_time`]
 	pub dns_resolution_time: u64,
+	/// Difference of [`Timing::connect_time`] and [`Timing::namelookup_time`]
 	pub tcp_connection_time: u64,
+	/// Difference of [`Timing::pretransfer_time`] and [`Timing::connect_time`]
 	pub tls_connection_time: u64,
+	/// Difference of [`Timing::starttransfer_time`] and [`Timing::pretransfer_time`]
 	pub server_processing_time: u64,
+	/// Difference of [`Timing::total_time`] and [`Timing::starttransfer_time`]
 	pub content_transfer_time: u64,
 }
 
+/// Converts from [`httpstat::Timing`] to [`Self`]
 impl From<HttpstatTiming> for Timing {
 	fn from(timing: HttpstatTiming) -> Self {
 		Self {
@@ -179,11 +208,11 @@ where
 	Ok(Result<T>),
 }
 
-struct TryJoinAll<F, T>(Vec<State<F, T>>)
+struct JoinAll<F, T>(Vec<State<F, T>>)
 where
 	F: Future<Output = Result<T>>;
 
-impl<F, T> Future for TryJoinAll<F, T>
+impl<F, T> Future for JoinAll<F, T>
 where
 	F: Future<Output = Result<T>>,
 {
@@ -224,11 +253,11 @@ where
 	}
 }
 
-fn try_join_all<F, T>(futures: Vec<F>) -> impl Future<Output = Result<Vec<Result<T>>>>
+fn join_all<F, T>(futures: Vec<F>) -> impl Future<Output = Result<Vec<Result<T>>>>
 where
 	F: Future<Output = Result<T>>,
 {
-	TryJoinAll(futures.into_iter().map(State::Future).collect())
+	JoinAll(futures.into_iter().map(State::Future).collect())
 }
 
 pub async fn upcake<T>(
@@ -253,7 +282,7 @@ where
 
 	reporter.start();
 
-	let results = try_join_all(request_futures).await?;
+	let results = join_all(request_futures).await?;
 
 	for result in results {
 		match result {

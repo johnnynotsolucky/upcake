@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use std::fmt;
 
@@ -7,21 +7,68 @@ pub trait Assert {
 	fn assert(&self, result: &YamlValue) -> bool;
 }
 
+fn value_to_string(value: &YamlValue) -> String {
+	match value {
+		YamlValue::Null => "null".into(),
+		YamlValue::Bool(inner) => format!("{}", inner),
+		YamlValue::Number(inner) => {
+			if inner.is_i64() {
+				format!("{}", inner.as_i64().unwrap())
+			} else {
+				format!("{}", inner.as_f64().unwrap())
+			}
+		}
+		YamlValue::String(inner) => inner.into(),
+		YamlValue::Sequence(inner) => serde_json::to_string(inner).unwrap(),
+		YamlValue::Mapping(inner) => serde_json::to_string(inner).unwrap(),
+	}
+}
+
+/// Configuration for the assertion to applied against the response results
 #[derive(Deserialize, Debug, Clone)]
 pub struct RequestAssertionConfig<T: Assert + ?Sized> {
+	/// Whether this assertion should be skipped
 	#[serde(default)]
 	pub skip: Option<String>,
+	/// The [`jql`] path to the field being asserted
 	#[serde(default)]
 	pub path: String,
+	/// The assertion to apply
 	#[serde(flatten)]
 	pub assertion: T,
 }
 
+/// Result of the assertion
 #[derive(Debug, Clone)]
 pub enum AssertionResult {
-	Success(AssertionConfig, YamlValue),
-	Failure(AssertionConfig, Option<YamlValue>, Option<String>),
-	Skip(AssertionConfig, String),
+	/// Assertion was successful
+	Success(
+		/// Assertion configuration used
+		AssertionConfig,
+		/// Found value
+		YamlValue,
+	),
+	/// Assertion failed
+	Failure(
+		/// Assertion configuration used
+		AssertionConfig,
+		/// Found value
+		YamlValue,
+	),
+	/// Failure not related to the assertion
+	FailureOther(
+		/// Assertion configuration used
+		AssertionConfig,
+		/// Failure reason
+		String,
+	),
+	/// Assertion skipped
+	Skip(
+		/// Assertion configuration used
+		AssertionConfig,
+		/// Reason for skipping
+		String,
+	),
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -64,15 +111,13 @@ impl AssertionConfig {
 			} else {
 				Ok(AssertionResult::Failure(
 					self.clone(),
-					Some(serde_yaml::to_value(found_value)?),
-					None,
+					serde_yaml::to_value(found_value)?,
 				))
 			}
 		} else {
-			Ok(AssertionResult::Failure(
+			Ok(AssertionResult::FailureOther(
 				self.clone(),
-				None,
-				Some("Invalid path".into()),
+				"Invalid path".into(),
 			))
 		}
 	}
@@ -110,12 +155,32 @@ impl fmt::Display for AssertionConfig {
 	}
 }
 
+/// Assert that a value is within a range
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Between {
+	/// Start of range
 	pub min: YamlValue,
+	/// End of range
 	pub max: YamlValue,
+	/// Whether to include [`Between::min`] and [`Between::max`]
 	#[serde(default)]
 	pub inclusive: bool,
+}
+
+impl Between {
+	pub fn new<T: Serialize>(min: T, max: T) -> Self {
+		Self {
+			min: serde_yaml::to_value(min).unwrap(),
+			max: serde_yaml::to_value(max).unwrap(),
+			inclusive: false,
+		}
+	}
+
+	pub fn new_inclusive<T: Serialize>(min: T, max: T) -> Self {
+		let mut s = Self::new(min, max);
+		s.inclusive = true;
+		s
+	}
 }
 
 impl Assert for Between {
@@ -125,23 +190,6 @@ impl Assert for Between {
 		} else {
 			*value > self.min && *value < self.max
 		}
-	}
-}
-
-fn value_to_string(value: &YamlValue) -> String {
-	match value {
-		YamlValue::Null => "null".into(),
-		YamlValue::Bool(inner) => format!("{}", inner),
-		YamlValue::Number(inner) => {
-			if inner.is_i64() {
-				format!("{}", inner.as_i64().unwrap())
-			} else {
-				format!("{}", inner.as_f64().unwrap())
-			}
-		}
-		YamlValue::String(inner) => inner.into(),
-		YamlValue::Sequence(inner) => serde_json::to_string(inner).unwrap(),
-		YamlValue::Mapping(inner) => serde_json::to_string(inner).unwrap(),
 	}
 }
 
@@ -161,26 +209,34 @@ impl fmt::Display for RequestAssertionConfig<Between> {
 	}
 }
 
+/// Assert that a value equals the given value
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Equal {
-	pub value: YamlValue,
+pub struct Equal(pub YamlValue);
+
+impl Equal {
+	pub fn new<T: Serialize>(value: T) -> Self {
+		Self(serde_yaml::to_value(value).unwrap())
+	}
 }
 
 impl Assert for Equal {
 	fn assert(&self, value: &YamlValue) -> bool {
-		*value == self.value
+		*value == self.0
 	}
 }
 
 impl fmt::Display for RequestAssertionConfig<Equal> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "equals {}", value_to_string(&self.assertion.value))
+		write!(f, "equals {}", value_to_string(&self.assertion.0))
 	}
 }
 
+/// Assert that a value is greater than the given value
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThan {
 	pub value: YamlValue,
+	// TODO make a GreaterThanEqual struct
+	// Whether to include [`GreaterThan::value`]
 	#[serde(default)]
 	pub inclusive: bool,
 }
@@ -210,9 +266,12 @@ impl fmt::Display for RequestAssertionConfig<GreaterThan> {
 	}
 }
 
+/// Assert that a value is less than the given value
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThan {
 	pub value: YamlValue,
+	// TODO make a LessThanEqual struct
+	// Whether to include [`LessThan::value`]
 	#[serde(default)]
 	pub inclusive: bool,
 }
@@ -242,10 +301,19 @@ impl fmt::Display for RequestAssertionConfig<LessThan> {
 	}
 }
 
+/// Assert that the length of a value passes the given assertion
 #[derive(Deserialize, Debug, Clone)]
 pub struct Length {
 	#[serde(rename = "assertion")]
 	pub inner: Box<AssertionConfig>,
+}
+
+impl Length {
+	pub fn new(assertion_config: AssertionConfig) -> Self {
+		Self {
+			inner: Box::new(assertion_config),
+		}
+	}
 }
 
 impl Assert for Length {
@@ -270,37 +338,49 @@ impl fmt::Display for RequestAssertionConfig<Length> {
 	}
 }
 
+/// Assert that a value is not equal to the given value
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct NotEqual {
-	pub value: YamlValue,
+pub struct NotEqual(pub YamlValue);
+
+impl NotEqual {
+	pub fn new<T: Serialize>(value: T) -> Self {
+		Self(serde_yaml::to_value(value).unwrap())
+	}
 }
 
 impl Assert for NotEqual {
 	fn assert(&self, value: &YamlValue) -> bool {
-		*value != self.value
+		*value != self.0
 	}
 }
 
 impl fmt::Display for RequestAssertionConfig<NotEqual> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "not equals {}", value_to_string(&self.assertion.value))
+		write!(f, "not equals {}", value_to_string(&self.assertion.0))
 	}
 }
 
+/// Assert that a value contains the given value.
+///
+/// Only works for string and iterator types.
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Contains {
-	pub value: YamlValue,
+pub struct Contains(pub YamlValue);
+
+impl Contains {
+	pub fn new<T: Serialize>(value: T) -> Self {
+		Self(serde_yaml::to_value(value).unwrap())
+	}
 }
 
 impl Assert for Contains {
 	fn assert(&self, value: &YamlValue) -> bool {
 		match value {
 			YamlValue::String(value) => self
-				.value
+				.0
 				.as_str()
 				.map_or(false, |substring| value.contains(substring)),
 			YamlValue::Sequence(value) => {
-				let search_value = self.value.clone();
+				let search_value = self.0.clone();
 				value.iter().any(|item| *item == search_value)
 			}
 			_ => false,
@@ -310,19 +390,24 @@ impl Assert for Contains {
 
 impl fmt::Display for RequestAssertionConfig<Contains> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "contains {}", value_to_string(&self.assertion.value))
+		write!(f, "contains {}", value_to_string(&self.assertion.0))
 	}
 }
 
+/// Assert that the given value exists as a key in the value
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Exists {
-	pub value: YamlValue,
+pub struct Exists(pub YamlValue);
+
+impl Exists {
+	pub fn new<T: Serialize>(value: T) -> Self {
+		Self(serde_yaml::to_value(value).unwrap())
+	}
 }
 
 impl Assert for Exists {
 	fn assert(&self, value: &YamlValue) -> bool {
 		match value {
-			YamlValue::Mapping(value) => value.contains_key(&self.value),
+			YamlValue::Mapping(value) => value.contains_key(&self.0),
 			_ => false,
 		}
 	}
@@ -330,7 +415,7 @@ impl Assert for Exists {
 
 impl fmt::Display for RequestAssertionConfig<Exists> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "exists {}", value_to_string(&self.assertion.value))
+		write!(f, "exists {}", value_to_string(&self.assertion.0))
 	}
 }
 
@@ -626,7 +711,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Equal { value: expected };
+			let assertion = Equal(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -697,13 +782,14 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Equal { value: expected };
+			let assertion = Equal(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
 		Ok(())
 	}
 
+	#[test]
 	fn assert_not_equal_is_equal() -> Result<()> {
 		let test_cases = vec![
 			(as_value(1), as_value(1), "1 equal 1"),
@@ -760,7 +846,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = NotEqual { value: expected };
+			let assertion = NotEqual(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -831,7 +917,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = NotEqual { value: expected };
+			let assertion = NotEqual(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -883,7 +969,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Contains { value: expected };
+			let assertion = Contains(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -929,7 +1015,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Contains { value: expected };
+			let assertion = Contains(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -956,7 +1042,7 @@ mod tests {
 		for (key, value, msg) in test_cases {
 			let key = serde_yaml::to_value(key)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Exists { value: key };
+			let assertion = Exists(key);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -988,7 +1074,7 @@ mod tests {
 		for (key, value, msg) in test_cases {
 			let key = serde_yaml::to_value(key)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Exists { value: key };
+			let assertion = Exists(key);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -1263,7 +1349,7 @@ mod tests {
 				inner: Box::new(AssertionConfig::Equal(RequestAssertionConfig {
 					skip: None,
 					path: "".into(),
-					assertion: Equal { value },
+					assertion: Equal(value),
 				})),
 			};
 			assert!(assertion.assert(&input), "{}", msg);
@@ -1277,13 +1363,16 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: Some("Skip".into()),
 			path: "".into(),
-			assertion: Equal { value: as_value::<Option<bool>>(None) },
+			assertion: Equal(as_value::<Option<bool>>(None)),
 		});
 
 		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
 			AssertionResult::Skip(_, reason) => {
-				assert!(reason == "Skip".to_string(), "skip assertion reason equal \"Skip\"")
-			},
+				assert!(
+					reason == "Skip".to_string(),
+					"skip assertion reason equal \"Skip\""
+				)
+			}
 			_ => assert!(false, "assertion should return Skip variant result"),
 		}
 
@@ -1295,14 +1384,17 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".\"invalid\"".into(),
-			assertion: Equal { value: as_value::<Option<bool>>(None) },
+			assertion: Equal(as_value::<Option<bool>>(None)),
 		});
 
 		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
-			AssertionResult::Failure(_, _, Some(reason)) => {
-				assert!(reason == "Invalid path".to_string(), "assertion failure reason equal \"Invalid path\"")
-			},
-			_ => assert!(false, "assertion should return Failure variant result"),
+			AssertionResult::FailureOther(_, reason) => {
+				assert!(
+					reason == "Invalid path".to_string(),
+					"assertion failure reason equal \"Invalid path\""
+				)
+			}
+			_ => assert!(false, "assertion should return FailureOther variant result"),
 		}
 
 		Ok(())
@@ -1313,13 +1405,17 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".".into(),
-			assertion: Equal { value: as_value(true) },
+			assertion: Equal(as_value(true)),
 		});
 
 		match assertion_config.assert(&as_value(false))? {
-			AssertionResult::Failure(_, Some(found), _) => {
-				assert!(found == as_value(false), "assertion failure found value {:?}", found)
-			},
+			AssertionResult::Failure(_, found) => {
+				assert!(
+					found == as_value(false),
+					"assertion failure found value {:?}",
+					found
+				)
+			}
 			_ => assert!(false, "assertion should return Failure variant result"),
 		}
 
@@ -1331,13 +1427,17 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".".into(),
-			assertion: Equal { value: as_value(true) },
+			assertion: Equal(as_value(true)),
 		});
 
 		match assertion_config.assert(&as_value(true))? {
 			AssertionResult::Success(_, found) => {
-				assert!(found == as_value(true), "assertion success found value {:?}", found)
-			},
+				assert!(
+					found == as_value(true),
+					"assertion success found value {:?}",
+					found
+				)
+			}
 			_ => assert!(false, "assertion should return Success variant result"),
 		}
 

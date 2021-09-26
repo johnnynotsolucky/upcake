@@ -49,8 +49,8 @@ impl Reporter for TapReporter {
 			return;
 		}
 
-		if let Some(ref summary) = request_config.summary {
-			println!("#\n# {}\n#", summary);
+		if let Some(ref name) = request_config.name {
+			println!("#\n# {}\n#", name);
 		} else {
 			println!(
 				"#\n# {} {}\n#",
@@ -76,31 +76,34 @@ impl Reporter for TapReporter {
 			AssertionResult::Success(assertion, _value) => {
 				println!("ok {} - {}", self.assertion_count, assertion);
 			}
-			AssertionResult::Failure(assertion, value, message) => {
+			AssertionResult::Failure(assertion, value) => {
 				println!("not ok {} - {}", self.assertion_count, assertion);
 
 				println!("  ---");
 				println!("  assertion: {}", assertion);
 
-				if let Some(message) = message {
-					println!("  message: {}\n", message);
-				} else if let Some(value) = value {
-					// Maybe its fine to unwrap by the time the program has reached this point?
-					let message = serde_yaml::to_string(&value).unwrap();
+				// Maybe its fine to unwrap by the time the program has reached this point?
+				let message = serde_yaml::to_string(&value).unwrap();
 
-					// Skip 1 to remove serde_yamls ---
-					let lines: Vec<&str> = message.lines().skip(1).collect();
+				// Skip 1 to remove serde_yamls ---
+				let lines: Vec<&str> = message.lines().skip(1).collect();
 
-					if lines.len() > 1 {
-						println!("  result:");
-						for line in lines.iter() {
-							println!("   {}", line);
-						}
-					} else {
-						println!("  result: {}", lines[0]);
+				if lines.len() > 1 {
+					println!("  result:");
+					for line in lines.iter() {
+						println!("   {}", line);
 					}
+				} else {
+					println!("  result: {}", lines[0]);
 				}
 
+				println!("  ---");
+			}
+			AssertionResult::FailureOther(assertion, message) => {
+				println!("not ok {} - {}", self.assertion_count, assertion);
+				println!("  ---");
+				println!("  assertion: {}", assertion);
+				println!("  message: {}\n", message);
 				println!("  ---");
 			}
 		}

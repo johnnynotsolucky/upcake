@@ -336,7 +336,7 @@ impl fmt::Display for RequestAssertionConfig<Exists> {
 
 #[cfg(test)]
 mod tests {
-	use crate::assertions::{Assert, Between, Contains, Equal, Exists, GreaterThan, LessThan};
+	use crate::assertions::*;
 	use anyhow::Result;
 	use serde::Serialize;
 	use serde_yaml::Value as YamlValue;
@@ -699,6 +699,140 @@ mod tests {
 			let value = serde_yaml::to_value(value)?;
 			let assertion = Equal { value: expected };
 			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	fn assert_not_equal_is_equal() -> Result<()> {
+		let test_cases = vec![
+			(as_value(1), as_value(1), "1 equal 1"),
+			(as_value(true), as_value(true), "true equal true"),
+			(as_value('a'), as_value('a'), "'a' equal 'a'"),
+			(
+				as_value("string"),
+				as_value("string"),
+				"\"string\" (&str) equal \"string\" (&str)",
+			),
+			(
+				as_value(Some(1)),
+				as_value(Some(1)),
+				"Some(1) equal Some(1)",
+			),
+			(
+				as_value(None as Option<bool>),
+				as_value(None as Option<bool>),
+				"None equal None",
+			),
+			(as_value(1.1), as_value(1.1), "1.1 equal 1.1"),
+			(
+				as_value("string".to_string()),
+				as_value("string".to_string()),
+				"\"string\" (String) equal \"string\" (String)",
+			),
+			(
+				as_value(vec![1, 2, 3]),
+				as_value(vec![1, 2, 3]),
+				"[1, 2, 3] equal [1, 2, 3]",
+			),
+			(
+				as_value(vec!["a", "b", "c"]),
+				as_value(vec!["a", "b", "c"]),
+				"[\"a\", \"b\", \"c\"] (Vec<&str>) equal [\"a\", \"b\", \"c\"] (Vec<&str>)",
+			),
+			(
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				"[\"a\", \"b\", \"c\"] (Vec<String>) equal [\"a\", \"b\", \"c\"] (Vec<String>)",
+			),
+			(
+				as_value(vec!['a', 'b', 'c']),
+				as_value(vec!['a', 'b', 'c']),
+				"['a', 'b', 'c'] (Vec<char>) equal ['a', 'b', 'c'] (Vec<char>)",
+			),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				"{\"value_a\": 1, \"value_b\": \"String\"} equal {\"value_a\": 1, \"value_b\": \"String\"}",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = NotEqual { value: expected };
+			assert!(!assertion.assert(&value), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_not_equal_is_not_equal() -> Result<()> {
+		let test_cases = vec![
+			(as_value(1), as_value(2), "1 not equal 2"),
+			(as_value(true), as_value(false), "true not equal false"),
+			(as_value('a'), as_value('b'), "'a' not equal 'b'"),
+			(
+				as_value("string"),
+				as_value("gnirts"),
+				"\"string\" (&str) not equal \"gnirts\" (&str)",
+			),
+			(
+				as_value(Some(1)),
+				as_value(Some(2)),
+				"Some(1) not equal Some(2)",
+			),
+			(
+				as_value(None as Option<bool>),
+				as_value(Some(true)),
+				"None not equal Some(true)",
+			),
+			(as_value(1.1), as_value(1.2), "1.1 not equal 1.2"),
+			(
+				as_value("string".to_string()),
+				as_value("gnirts".to_string()),
+				"\"string\" (String) not equal \"gnirts\" (String)",
+			),
+			(
+				as_value(vec![1, 2, 3]),
+				as_value(vec![3, 2, 1]),
+				"[1, 2, 3] not equal [3, 2, 1]",
+			),
+			(
+				as_value(vec!["a", "b", "c"]),
+				as_value(vec!["c", "b", "a"]),
+				"[\"a\", \"b\", \"c\"] (Vec<&str>) not equal [\"c\", \"b\", \"a\"] (Vec<&str>)",
+			),
+			(
+				as_value(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+				as_value(vec!["c".to_string(), "b".to_string(), "a".to_string()]),
+				"[\"a\", \"b\", \"c\"] (Vec<String>) not equal [\"c\", \"b\", \"a\"] (Vec<String>)",
+			),
+			(
+				as_value(vec!['a', 'b', 'c']),
+				as_value(vec!['c', 'b', 'a']),
+				"['a', 'b', 'c'] (Vec<char>) not equal ['c', 'b', 'a'] (Vec<char>)",
+			),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(Mapping { value_a: 2, value_b: "Gnirts".into() }),
+				"{\"value_a\": 1, \"value_b\": \"String\"} not equal {\"value_a\": 2, \"value_b\": \"Gnirts\"}",
+			),
+			(as_value(1), as_value(1.0), "1 not equal 1.0"),
+			(as_value(true), as_value("true"), "true not equal \"true\""),
+			(
+				as_value(Mapping { value_a: 1, value_b: "String".into() }),
+				as_value(vec![1, 2]),
+				"{\"value_a\": 1, \"value_b\": \"String\"} not equal [1, 2]",
+			),
+		];
+
+		for (expected, value, msg) in test_cases {
+			let expected = serde_yaml::to_value(expected)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = NotEqual { value: expected };
+			assert!(assertion.assert(&value), "{}", msg);
 		}
 
 		Ok(())
@@ -1098,8 +1232,115 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore]
-	fn assert_length_() -> Result<()> {
-		todo!()
+	fn assert_length_equal() -> Result<()> {
+		let mut mapping = std::collections::HashMap::new();
+		mapping.insert("one", 1);
+		mapping.insert("two", 2);
+		mapping.insert("three", 3);
+
+		let test_cases = vec![
+			(
+				as_value("some string"),
+				as_value(11),
+				"length of \"some string\" equal 11",
+			),
+			(
+				as_value(vec![1, 2, 3]),
+				as_value(3),
+				"length of [1, 2, 3] equal 3",
+			),
+			(
+				as_value(mapping),
+				as_value(3),
+				"length of {\"one\": 1, \"two\": 2, \"three\": 3} equal 3",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = Length {
+				inner: Box::new(AssertionConfig::Equal(RequestAssertionConfig {
+					skip: None,
+					path: "".into(),
+					assertion: Equal { value },
+				})),
+			};
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_skip_assertion() -> Result<()> {
+		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
+			skip: Some("Skip".into()),
+			path: "".into(),
+			assertion: Equal { value: as_value::<Option<bool>>(None) },
+		});
+
+		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
+			AssertionResult::Skip(_, reason) => {
+				assert!(reason == "Skip".to_string(), "skip assertion reason equal \"Skip\"")
+			},
+			_ => assert!(false, "assertion should return Skip variant result"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_failure_invalid_path() -> Result<()> {
+		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
+			skip: None,
+			path: ".\"invalid\"".into(),
+			assertion: Equal { value: as_value::<Option<bool>>(None) },
+		});
+
+		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
+			AssertionResult::Failure(_, _, Some(reason)) => {
+				assert!(reason == "Invalid path".to_string(), "assertion failure reason equal \"Invalid path\"")
+			},
+			_ => assert!(false, "assertion should return Failure variant result"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_failure_failed_assert() -> Result<()> {
+		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
+			skip: None,
+			path: ".".into(),
+			assertion: Equal { value: as_value(true) },
+		});
+
+		match assertion_config.assert(&as_value(false))? {
+			AssertionResult::Failure(_, Some(found), _) => {
+				assert!(found == as_value(false), "assertion failure found value {:?}", found)
+			},
+			_ => assert!(false, "assertion should return Failure variant result"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_success_assert() -> Result<()> {
+		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
+			skip: None,
+			path: ".".into(),
+			assertion: Equal { value: as_value(true) },
+		});
+
+		match assertion_config.assert(&as_value(true))? {
+			AssertionResult::Success(_, found) => {
+				assert!(found == as_value(true), "assertion success found value {:?}", found)
+			},
+			_ => assert!(false, "assertion should return Success variant result"),
+		}
+
+		Ok(())
 	}
 }

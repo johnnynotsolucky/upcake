@@ -336,7 +336,7 @@ impl fmt::Display for RequestAssertionConfig<Exists> {
 
 #[cfg(test)]
 mod tests {
-	use crate::assertions::{Assert, Between, Contains, Equal, Exists};
+	use crate::assertions::{Assert, Between, Contains, Equal, Exists, GreaterThan, LessThan};
 	use anyhow::Result;
 	use serde::Serialize;
 	use serde_yaml::Value as YamlValue;
@@ -862,51 +862,239 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_greater_than_is_gt_exclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(as_value(1), as_value(0), "1 is greater than 0, exclusive"),
+			(
+				as_value(0.1),
+				as_value(0),
+				"0.1 is greater than 0, exclusive",
+			),
+			(as_value(0), as_value(-1), "0 is greater than -1, exclusive"),
+			(as_value(1), as_value(-1), "1 is greater than -1, exclusive"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = GreaterThan {
+				value,
+				inclusive: false,
+			};
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_greater_than_is_not_gt_exclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(
+				as_value(0),
+				as_value(0),
+				"0 is not greater than 0, exclusive",
+			),
+			(
+				as_value(0),
+				as_value(0.1),
+				"0 is not greater than 0.1, exclusive",
+			),
+			(
+				as_value(-1),
+				as_value(0),
+				"-1 is not greater than 0, exclusive",
+			),
+			(
+				as_value(-1),
+				as_value(1),
+				"-1 is not greater than 1, exclusive",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = GreaterThan {
+				value,
+				inclusive: false,
+			};
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_greater_than_is_gt_inclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(as_value(1), as_value(1), "1 is greater than 1, inclusive"),
+			(
+				as_value(0.0),
+				as_value(0.0),
+				"0.0 is greater than 0.0, inclusive",
+			),
+			(as_value(1), as_value(0), "1 is greater than 0, inclusive"),
+			(
+				as_value(0.1),
+				as_value(0),
+				"0.1 is greater than 0, inclusive",
+			),
+			(as_value(0), as_value(-1), "0 is greater than -1, inclusive"),
+			(as_value(1), as_value(-1), "1 is greater than -1, inclusive"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = GreaterThan {
+				value,
+				inclusive: true,
+			};
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_greater_than_is_not_gt_inclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(
+				as_value(0),
+				as_value(0.1),
+				"0 is not greater than 0.1, inclusive",
+			),
+			(
+				as_value(-1),
+				as_value(0),
+				"-1 is not greater than 0, inclusive",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = GreaterThan {
+				value,
+				inclusive: true,
+			};
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_less_than_is_lt_exclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(as_value(0), as_value(1), "0 is less than 1, exclusive"),
+			(as_value(0), as_value(0.1), "0 is less than 0.1, exclusive"),
+			(as_value(-1), as_value(0), "-1 is less than 0, exclusive"),
+			(as_value(-1), as_value(1), "-1 is less than 1, exclusive"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan {
+				value,
+				inclusive: false,
+			};
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_less_than_is_not_lt_exclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(as_value(0), as_value(0), "0 is not less than 0, exclusive"),
+			(
+				as_value(0.1),
+				as_value(0),
+				"0.1 is not less than 0, exclusive",
+			),
+			(
+				as_value(0),
+				as_value(-1),
+				"0 is not less than -1, exclusive",
+			),
+			(
+				as_value(1),
+				as_value(-1),
+				"1 is not less than -1, exclusive",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan {
+				value,
+				inclusive: false,
+			};
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_less_than_is_lt_inclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(as_value(1), as_value(1), "1 is less than 1, inclusive"),
+			(
+				as_value(0.0),
+				as_value(0.0),
+				"0.0 is less than 0.0, inclusive",
+			),
+			(as_value(0), as_value(1), "0 is less than 1, inclusive"),
+			(as_value(0), as_value(0.1), "0 is less than 0.1, inclusive"),
+			(as_value(-1), as_value(0), "-1 is less than 0, inclusive"),
+			(as_value(-1), as_value(1), "-1 is less than 1, inclusive"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan {
+				value,
+				inclusive: true,
+			};
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]
-	#[ignore]
 	fn assert_less_than_is_not_lt_inclusive() -> Result<()> {
-		todo!()
+		let test_cases = vec![
+			(
+				as_value(0.1),
+				as_value(0),
+				"0.1 is not less than 0, inclusive",
+			),
+			(
+				as_value(0),
+				as_value(-1),
+				"0 is not less than -1, inclusive",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan {
+				value,
+				inclusive: true,
+			};
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
 	}
 
 	#[test]

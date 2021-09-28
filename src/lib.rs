@@ -199,7 +199,7 @@ async fn run_request<C>(
 	context: Arc<Mutex<TemplateContext<C>>>,
 ) -> RequestResult
 where
-	C: Serialize + std::fmt::Debug,
+	C: Serialize,
 {
 	let handlebars = Handlebars::new();
 
@@ -262,7 +262,7 @@ type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
 struct Requests<C>
 where
-	C: Serialize + std::fmt::Debug,
+	C: Serialize,
 {
 	config: Arc<Config>,
 	context: Arc<Mutex<TemplateContext<C>>>,
@@ -271,7 +271,7 @@ where
 
 impl<C: 'static> Future for Requests<C>
 where
-	C: Serialize + std::fmt::Debug,
+	C: Serialize,
 {
 	type Output = Result<Vec<RequestResult>>;
 
@@ -346,7 +346,6 @@ where
 			let states = std::mem::take(states);
 			let results = states
 				.into_values()
-				// .into_iter()
 				.map(|state| match state {
 					State::Done(result) => *result,
 					_ => unreachable!(),
@@ -363,7 +362,7 @@ where
 #[derive(Serialize, Debug, Clone)]
 struct TemplateContext<C>
 where
-	C: Serialize + std::fmt::Debug,
+	C: Serialize,
 {
 	user: Option<C>,
 	env: HashMap<String, String>,
@@ -379,7 +378,7 @@ pub async fn upcake<C: 'static>(
 	reporter: &mut dyn Reporter,
 ) -> Result<()>
 where
-	C: Serialize + std::fmt::Debug,
+	C: Serialize,
 {
 	let mut request_config_map = HashMap::new();
 

@@ -1,8 +1,5 @@
 use anyhow::Result;
 use futures::executor::block_on;
-use serde::Serialize;
-use std::collections::HashMap;
-use std::env;
 use std::fs;
 use structopt::StructOpt;
 
@@ -48,15 +45,6 @@ fn main() -> Result<()> {
 		max_response_size: opt.max_response_size,
 	};
 
-	let context = Context {
-		env: env::vars().collect(),
-	};
-
 	let mut reporter = TapReporter::new();
-	block_on(upcake(config, requests, context, &mut reporter))
-}
-
-#[derive(Serialize, Debug, Clone)]
-pub struct Context {
-	pub env: HashMap<String, String>,
+	block_on(upcake(config, requests, None as Option<()>, &mut reporter))
 }

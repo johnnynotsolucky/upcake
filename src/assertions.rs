@@ -211,23 +211,53 @@ impl fmt::Display for RequestAssertionConfig<Between> {
 
 /// Assert that a value equals the given value
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Equal(pub YamlValue);
+pub struct Equal {
+	value: YamlValue,
+}
 
 impl Equal {
 	pub fn new<T: Serialize>(value: T) -> Self {
-		Self(serde_yaml::to_value(value).unwrap())
+		Self {
+			value: serde_yaml::to_value(value).unwrap(),
+		}
 	}
 }
 
 impl Assert for Equal {
 	fn assert(&self, value: &YamlValue) -> bool {
-		*value == self.0
+		*value == self.value
 	}
 }
 
 impl fmt::Display for RequestAssertionConfig<Equal> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "equals {}", value_to_string(&self.assertion.0))
+		write!(f, "equals {}", value_to_string(&self.assertion.value))
+	}
+}
+
+/// Assert that a value is not equal to the given value
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct NotEqual {
+	value: YamlValue,
+}
+
+impl NotEqual {
+	pub fn new<T: Serialize>(value: T) -> Self {
+		Self {
+			value: serde_yaml::to_value(value).unwrap(),
+		}
+	}
+}
+
+impl Assert for NotEqual {
+	fn assert(&self, value: &YamlValue) -> bool {
+		*value != self.value
+	}
+}
+
+impl fmt::Display for RequestAssertionConfig<NotEqual> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "not equals {}", value_to_string(&self.assertion.value))
 	}
 }
 
@@ -338,37 +368,19 @@ impl fmt::Display for RequestAssertionConfig<Length> {
 	}
 }
 
-/// Assert that a value is not equal to the given value
-#[derive(Deserialize, Default, Debug, Clone)]
-pub struct NotEqual(pub YamlValue);
-
-impl NotEqual {
-	pub fn new<T: Serialize>(value: T) -> Self {
-		Self(serde_yaml::to_value(value).unwrap())
-	}
-}
-
-impl Assert for NotEqual {
-	fn assert(&self, value: &YamlValue) -> bool {
-		*value != self.0
-	}
-}
-
-impl fmt::Display for RequestAssertionConfig<NotEqual> {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "not equals {}", value_to_string(&self.assertion.0))
-	}
-}
-
 /// Assert that a value contains the given value.
 ///
 /// Only works for string and iterator types.
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Contains(pub YamlValue);
+pub struct Contains {
+	value: YamlValue,
+}
 
 impl Contains {
 	pub fn new<T: Serialize>(value: T) -> Self {
-		Self(serde_yaml::to_value(value).unwrap())
+		Self {
+			value: serde_yaml::to_value(value).unwrap(),
+		}
 	}
 }
 
@@ -376,11 +388,11 @@ impl Assert for Contains {
 	fn assert(&self, value: &YamlValue) -> bool {
 		match value {
 			YamlValue::String(value) => self
-				.0
+				.value
 				.as_str()
 				.map_or(false, |substring| value.contains(substring)),
 			YamlValue::Sequence(value) => {
-				let search_value = self.0.clone();
+				let search_value = self.value.clone();
 				value.iter().any(|item| *item == search_value)
 			}
 			_ => false,
@@ -390,24 +402,28 @@ impl Assert for Contains {
 
 impl fmt::Display for RequestAssertionConfig<Contains> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "contains {}", value_to_string(&self.assertion.0))
+		write!(f, "contains {}", value_to_string(&self.assertion.value))
 	}
 }
 
 /// Assert that the given value exists as a key in the value
 #[derive(Deserialize, Default, Debug, Clone)]
-pub struct Exists(pub YamlValue);
+pub struct Exists {
+	value: YamlValue,
+}
 
 impl Exists {
 	pub fn new<T: Serialize>(value: T) -> Self {
-		Self(serde_yaml::to_value(value).unwrap())
+		Self {
+			value: serde_yaml::to_value(value).unwrap(),
+		}
 	}
 }
 
 impl Assert for Exists {
 	fn assert(&self, value: &YamlValue) -> bool {
 		match value {
-			YamlValue::Mapping(value) => value.contains_key(&self.0),
+			YamlValue::Mapping(value) => value.contains_key(&self.value),
 			_ => false,
 		}
 	}
@@ -415,7 +431,7 @@ impl Assert for Exists {
 
 impl fmt::Display for RequestAssertionConfig<Exists> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "exists {}", value_to_string(&self.assertion.0))
+		write!(f, "exists {}", value_to_string(&self.assertion.value))
 	}
 }
 
@@ -671,8 +687,8 @@ mod tests {
 				"Some(1) equal Some(1)",
 			),
 			(
-				as_value(None as Option<bool>),
-				as_value(None as Option<bool>),
+				as_value(None as Option<()>),
+				as_value(None as Option<()>),
 				"None equal None",
 			),
 			(as_value(1.1), as_value(1.1), "1.1 equal 1.1"),
@@ -711,7 +727,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Equal(expected);
+			let assertion = Equal::new(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -735,7 +751,7 @@ mod tests {
 				"Some(1) not equal Some(2)",
 			),
 			(
-				as_value(None as Option<bool>),
+				as_value(None as Option<()>),
 				as_value(Some(true)),
 				"None not equal Some(true)",
 			),
@@ -782,7 +798,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Equal(expected);
+			let assertion = Equal::new(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -806,8 +822,8 @@ mod tests {
 				"Some(1) equal Some(1)",
 			),
 			(
-				as_value(None as Option<bool>),
-				as_value(None as Option<bool>),
+				as_value(None as Option<()>),
+				as_value(None as Option<()>),
 				"None equal None",
 			),
 			(as_value(1.1), as_value(1.1), "1.1 equal 1.1"),
@@ -846,7 +862,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = NotEqual(expected);
+			let assertion = NotEqual::new(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -870,7 +886,7 @@ mod tests {
 				"Some(1) not equal Some(2)",
 			),
 			(
-				as_value(None as Option<bool>),
+				as_value(None as Option<()>),
 				as_value(Some(true)),
 				"None not equal Some(true)",
 			),
@@ -917,7 +933,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = NotEqual(expected);
+			let assertion = NotEqual::new(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -969,7 +985,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Contains(expected);
+			let assertion = Contains::new(expected);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -1015,7 +1031,7 @@ mod tests {
 		for (expected, value, msg) in test_cases {
 			let expected = serde_yaml::to_value(expected)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Contains(expected);
+			let assertion = Contains::new(expected);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -1042,7 +1058,7 @@ mod tests {
 		for (key, value, msg) in test_cases {
 			let key = serde_yaml::to_value(key)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Exists(key);
+			let assertion = Exists::new(key);
 			assert!(assertion.assert(&value), "{}", msg);
 		}
 
@@ -1074,7 +1090,7 @@ mod tests {
 		for (key, value, msg) in test_cases {
 			let key = serde_yaml::to_value(key)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = Exists(key);
+			let assertion = Exists::new(key);
 			assert!(!assertion.assert(&value), "{}", msg);
 		}
 
@@ -1349,7 +1365,7 @@ mod tests {
 				inner: Box::new(AssertionConfig::Equal(RequestAssertionConfig {
 					skip: None,
 					path: "".into(),
-					assertion: Equal(value),
+					assertion: Equal::new(value),
 				})),
 			};
 			assert!(assertion.assert(&input), "{}", msg);
@@ -1363,10 +1379,10 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: Some("Skip".into()),
 			path: "".into(),
-			assertion: Equal(as_value::<Option<bool>>(None)),
+			assertion: Equal::new(None as Option<()>),
 		});
 
-		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
+		match assertion_config.assert(&as_value(None as Option<()>))? {
 			AssertionResult::Skip(_, reason) => {
 				assert!(
 					reason == "Skip".to_string(),
@@ -1384,10 +1400,10 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".\"invalid\"".into(),
-			assertion: Equal(as_value::<Option<bool>>(None)),
+			assertion: Equal::new(None as Option<()>),
 		});
 
-		match assertion_config.assert(&as_value::<Option<bool>>(None))? {
+		match assertion_config.assert(&as_value(None as Option<()>))? {
 			AssertionResult::FailureOther(_, reason) => {
 				assert!(
 					reason == "Invalid path".to_string(),
@@ -1405,7 +1421,7 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".".into(),
-			assertion: Equal(as_value(true)),
+			assertion: Equal::new(true),
 		});
 
 		match assertion_config.assert(&as_value(false))? {
@@ -1427,7 +1443,7 @@ mod tests {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
 			path: ".".into(),
-			assertion: Equal(as_value(true)),
+			assertion: Equal::new(true),
 		});
 
 		match assertion_config.assert(&as_value(true))? {

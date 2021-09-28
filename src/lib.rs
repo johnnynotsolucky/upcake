@@ -5,13 +5,15 @@ use anyhow::Result;
 use handlebars::Handlebars;
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
+use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::env;
 use std::future::Future;
 use std::pin::Pin;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
@@ -24,18 +26,25 @@ use reporters::Reporter;
 pub struct RequestConfig {
 	/// Name of the request
 	pub name: Option<String>,
+	/// Vec of requests which this request depends on
+	#[serde(default)]
+	pub depends: Vec<String>,
 	/// Specify the request command to use, i.e. "GET"
 	#[serde(default = "default_request_method")]
 	pub request_method: String,
-	/// Data to pass with the request.
+	/// Data to pass with the request
 	///
 	/// Contents are rendered with Handlebars.
 	///
 	/// Send the contents of a file by prefixing with an @: `"@/path/to/file.json"`
 	pub data: Option<String>,
 	/// Key/Value pairs of headers to send with the request
+	///
+	/// Header values are rendered with Handlebars.
 	pub headers: Option<HashMap<String, String>>,
 	/// The url to request
+	///
+	/// The url string is rendered with Handlebars.
 	pub url: String,
 	/// A list of assertions to perform on the response
 	#[serde(default = "default_assertions")]
@@ -50,7 +59,7 @@ pub(crate) fn default_assertions() -> Vec<AssertionConfig> {
 	vec![AssertionConfig::Equal(RequestAssertionConfig {
 		skip: None,
 		path: ".\"response_code\"".into(),
-		assertion: Equal(serde_yaml::to_value(200).unwrap()),
+		assertion: Equal::new(200),
 	})]
 }
 
@@ -73,45 +82,53 @@ pub struct Config {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Timing {
 	/// Duration in milliseconds from the start of the request until name lookup resolved
-	pub namelookup_time: u64,
+	pub namelookup: u64,
 	/// Duration in milliseconds from the start of the request until a connection to the remote
 	/// host is established
-	pub connect_time: u64,
+	pub connect: u64,
 	/// Duration in milliseconds from the start of the request until file transfer was about to
 	/// begin
-	pub pretransfer_time: u64,
+	pub pretransfer: u64,
 	/// Duration in milliseconds from the start of the request until the first byte was received
-	pub starttransfer_time: u64,
+	pub starttransfer: u64,
 	/// Duration in milliseconds from the start of the request until the request ended
-	pub total_time: u64,
-	/// Same as [`Timing::namelookup_time`]
-	pub dns_resolution_time: u64,
-	/// Difference of [`Timing::connect_time`] and [`Timing::namelookup_time`]
-	pub tcp_connection_time: u64,
-	/// Difference of [`Timing::pretransfer_time`] and [`Timing::connect_time`]
-	pub tls_connection_time: u64,
-	/// Difference of [`Timing::starttransfer_time`] and [`Timing::pretransfer_time`]
-	pub server_processing_time: u64,
-	/// Difference of [`Timing::total_time`] and [`Timing::starttransfer_time`]
-	pub content_transfer_time: u64,
+	pub total: u64,
+	/// Same as [`Timing::namelookup`]
+	pub dns_resolution: u64,
+	/// Difference of [`Timing::connect`] and [`Timing::namelookup`]
+	pub tcp_connection: u64,
+	/// Difference of [`Timing::pretransfer`] and [`Timing::connect`]
+	pub tls_connection: u64,
+	/// Difference of [`Timing::starttransfer`] and [`Timing::pretransfer`]
+	pub server_processing: u64,
+	/// Difference of [`Timing::total`] and [`Timing::starttransfer`]
+	pub content_transfer: u64,
 }
 
 /// Converts from [`httpstat::Timing`] to [`Self`]
 impl From<HttpstatTiming> for Timing {
 	fn from(timing: HttpstatTiming) -> Self {
 		Self {
-			namelookup_time: timing.namelookup_time.as_millis() as u64,
-			connect_time: timing.connect_time.as_millis() as u64,
-			pretransfer_time: timing.pretransfer_time.as_millis() as u64,
-			starttransfer_time: timing.starttransfer_time.as_millis() as u64,
-			total_time: timing.total_time.as_millis() as u64,
-			dns_resolution_time: timing.dns_resolution_time.as_millis() as u64,
-			tcp_connection_time: timing.tcp_connection_time.as_millis() as u64,
-			tls_connection_time: timing.tls_connection_time.as_millis() as u64,
-			server_processing_time: timing.server_processing_time.as_millis() as u64,
-			content_transfer_time: timing.content_transfer_time.as_millis() as u64,
+			namelookup: timing.namelookup_time.as_millis() as u64,
+			connect: timing.connect_time.as_millis() as u64,
+			pretransfer: timing.pretransfer_time.as_millis() as u64,
+			starttransfer: timing.starttransfer_time.as_millis() as u64,
+			total: timing.total_time.as_millis() as u64,
+			dns_resolution: timing.dns_resolution_time.as_millis() as u64,
+			tcp_connection: timing.tcp_connection_time.as_millis() as u64,
+			tls_connection: timing.tls_connection_time.as_millis() as u64,
+			server_processing: timing.server_processing_time.as_millis() as u64,
+			content_transfer: timing.content_transfer_time.as_millis() as u64,
 		}
 	}
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum ResponseContent {
+	NoContent,
+	Other(String),
+	Json(JsonValue),
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -121,8 +138,7 @@ pub struct StatResult {
 	pub response_message: Option<String>,
 	pub headers: Vec<Header>,
 	pub timing: Timing,
-	pub json: Option<JsonValue>,
-	pub body: Option<String>,
+	pub content: ResponseContent,
 }
 
 impl From<HttpstatResult> for StatResult {
@@ -133,40 +149,67 @@ impl From<HttpstatResult> for StatResult {
 			response_message: result.response_message,
 			headers: result.headers,
 			timing: result.timing.into(),
-			json: None,
-			body: None,
+			content: ResponseContent::NoContent,
 		};
 
 		if let Ok(body) = str::from_utf8(&result.body[..]) {
 			if let Ok(json_content) = serde_json::from_str(body) {
-				stat_result.json = Some(json_content);
+				stat_result.content = ResponseContent::Json(json_content);
+			} else {
+				stat_result.content = ResponseContent::Other(body.into());
 			}
-
-			stat_result.body = Some(body.into());
 		}
 
 		stat_result
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct ResponseData {
+	inner: Arc<StatResult>,
+}
+
+impl From<Arc<StatResult>> for ResponseData {
+	fn from(result: Arc<StatResult>) -> Self {
+		Self { inner: result }
+	}
+}
+
+impl Serialize for ResponseData {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		let mut map = serializer.serialize_map(Some(2))?;
+		map.serialize_entry("headers", &self.inner.headers)?;
+		map.serialize_entry("content", &self.inner.content)?;
+		map.end()
+	}
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
 	#[error("{0:?}")]
-	RequestError(RequestConfig, String),
+	RequestError(Arc<RequestConfig>, String),
 }
 
-async fn run_request<T: Serialize>(
+async fn run_request<C>(
 	config: Arc<Config>,
-	request_config: RequestConfig,
-	context: Arc<T>,
-) -> Result<(RequestConfig, StatResult)> {
+	request_config: Arc<RequestConfig>,
+	context: Arc<Mutex<TemplateContext<C>>>,
+) -> RequestResult
+where
+	C: Serialize + std::fmt::Debug,
+{
 	let handlebars = Handlebars::new();
+
 	let headers = match request_config.headers {
 		Some(ref headers) => {
 			let mut joined_headers: Vec<String> = Vec::new();
 
 			for (header, value) in headers {
-				let rendered_value = handlebars.render_template(value, &*context)?;
+				let rendered_value =
+					handlebars.render_template(value, &*context.lock().unwrap())?;
 				joined_headers.push(format!("{}: {}", header, rendered_value));
 			}
 
@@ -175,9 +218,9 @@ async fn run_request<T: Serialize>(
 		None => None,
 	};
 
-	let url = handlebars.render_template(&request_config.url, &*context)?;
+	let url = handlebars.render_template(&request_config.url, &*context.lock().unwrap())?;
 	let data = match request_config.data {
-		Some(ref data) => Some(handlebars.render_template(data, &*context)?),
+		Some(ref data) => Some(handlebars.render_template(data, &*context.lock().unwrap())?),
 		None => None,
 	};
 
@@ -195,53 +238,117 @@ async fn run_request<T: Serialize>(
 	};
 
 	match httpstat(&httpstat_config).await {
-		Ok(httpstat_result) => Ok((request_config, httpstat_result.into())),
+		Ok(httpstat_result) => Ok((request_config, Arc::new(httpstat_result.into()))),
 		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
 	}
 }
 
-enum State<F, T>
+enum State<F>
 where
-	F: Future<Output = Result<T>>,
+	F: Future<Output = RequestResult>,
 {
+	/// Request configuration for requests which haven't started running yet
+	Wait(Arc<RequestConfig>),
+	/// The request future for running requests
 	Future(F),
-	Ok(Result<T>),
+	/// Request has completed
+	///
+	/// Boxed so that allocation for [`State`] is not oversized just for this variant.
+	Done(Box<RequestResult>),
 }
 
-struct JoinAll<F, T>(Vec<State<F, T>>)
-where
-	F: Future<Output = Result<T>>;
+type RequestResult = Result<(Arc<RequestConfig>, Arc<StatResult>)>;
+type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
-impl<F, T> Future for JoinAll<F, T>
+struct Requests<C>
 where
-	F: Future<Output = Result<T>>,
+	C: Serialize + std::fmt::Debug,
 {
-	type Output = Result<Vec<Result<T>>>;
+	config: Arc<Config>,
+	context: Arc<Mutex<TemplateContext<C>>>,
+	states: HashMap<String, RequestState>,
+}
+
+impl<C: 'static> Future for Requests<C>
+where
+	C: Serialize + std::fmt::Debug,
+{
+	type Output = Result<Vec<RequestResult>>;
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = unsafe { self.get_unchecked_mut() };
-		let states = &mut this.0;
+		let states = &mut this.states;
+
+		// Start any requests which have no depends or have depends which have all completed
+		// successfully.
+		let done_set: HashSet<_> = states
+			.iter()
+			.filter_map(|(key, state)| match state {
+				State::Done(ref result) => match **result {
+					Ok(_) => Some(key),
+					_ => None,
+				},
+				_ => None,
+			})
+			.cloned()
+			.collect();
+
+		for (_, state) in states.iter_mut() {
+			if let State::Wait(request_config) = state {
+				// TODO validate that the depends keys actually exist
+				let depends_set: HashSet<_> = request_config.depends.clone().into_iter().collect();
+				let intersection: HashSet<_> = done_set.intersection(&depends_set).collect();
+
+				if intersection.len() == depends_set.len() {
+					*state = State::Future(Box::pin(run_request(
+						this.config.clone(),
+						request_config.clone(),
+						this.context.clone(),
+					)));
+				}
+			}
+		}
 
 		let mut all_ready = true;
 
-		for state in states.iter_mut() {
-			if let State::Future(future) = state {
-				match unsafe { Pin::new_unchecked(future) }.poll(context) {
-					Poll::Ready(result) => *state = State::Ok(result),
-					Poll::Pending => {
-						all_ready = false;
-						continue;
+		for (name, state) in states.iter_mut() {
+			// Immediately poll...?
+			match state {
+				State::Future(future) => {
+					match unsafe { Pin::new_unchecked(future) }.poll(context) {
+						Poll::Ready(result) => {
+							let result = Box::new(result);
+
+							if let Ok((_, ref stat_result)) = *result {
+								let mut context = this.context.lock().unwrap();
+								context
+									.requests
+									.insert(name.clone(), ResponseData::from(stat_result.clone()));
+							}
+
+							*state = State::Done(result);
+						}
+						Poll::Pending => {
+							all_ready = false;
+							continue;
+						}
 					}
 				}
+				State::Wait(_) => {
+					all_ready = false;
+					continue;
+				}
+				State::Done(_) => continue,
 			}
 		}
 
 		if all_ready {
 			let states = std::mem::take(states);
 			let results = states
-				.into_iter()
+				.into_values()
+				// .into_iter()
 				.map(|state| match state {
-					State::Ok(result) => result,
+					State::Done(result) => *result,
 					_ => unreachable!(),
 				})
 				.collect();
@@ -253,42 +360,56 @@ where
 	}
 }
 
-fn join_all<F, T>(futures: Vec<F>) -> impl Future<Output = Result<Vec<Result<T>>>>
+#[derive(Serialize, Debug, Clone)]
+struct TemplateContext<C>
 where
-	F: Future<Output = Result<T>>,
+	C: Serialize + std::fmt::Debug,
 {
-	JoinAll(futures.into_iter().map(State::Future).collect())
+	user: Option<C>,
+	env: HashMap<String, String>,
+	/// requests is serialized when rendering templates, but we need an [`Arc`] so that we can pass
+	/// the result around internally.
+	requests: HashMap<String, ResponseData>,
 }
 
-pub async fn upcake<T>(
+pub async fn upcake<C: 'static>(
 	config: Config,
 	requests: Vec<RequestConfig>,
-	context: T,
+	context: Option<C>,
 	reporter: &mut dyn Reporter,
 ) -> Result<()>
 where
-	T: Serialize + std::marker::Sync + std::marker::Send + 'static,
+	C: Serialize + std::fmt::Debug,
 {
-	let context = Arc::new(context);
-	let config = Arc::new(config);
-	let mut request_futures = Vec::new();
+	let mut request_config_map = HashMap::new();
 
-	for request_config in requests {
-		let context = context.clone();
-		let config = config.clone();
-
-		request_futures.push(run_request(config, request_config, context))
+	for (idx, request_config) in requests.into_iter().enumerate() {
+		// TODO probably make sure name is not something silly like "" or " "
+		let name = request_config
+			.name
+			.clone()
+			.unwrap_or_else(|| format!("{}", idx));
+		request_config_map.insert(name, State::Wait(Arc::new(request_config)));
 	}
 
 	reporter.start();
 
-	let results = join_all(request_futures).await?;
+	let requests = Requests {
+		context: Arc::new(Mutex::new(TemplateContext {
+			user: context,
+			env: env::vars().collect(),
+			requests: HashMap::new(),
+		})),
+		config: Arc::new(config),
+		states: request_config_map,
+	};
+	let results = requests.await?;
 
 	for result in results {
 		match result {
 			Ok((request_config, stat_result)) => {
 				reporter.step_suite(&request_config);
-				let result = serde_yaml::to_value(&stat_result)?;
+				let result = serde_yaml::to_value(&*stat_result)?;
 
 				for assertion in request_config.assertions.iter() {
 					reporter.step_result(assertion.assert(&result)?);

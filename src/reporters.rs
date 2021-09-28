@@ -89,12 +89,12 @@ impl Reporter for TapReporter {
 				let lines: Vec<&str> = message.lines().skip(1).collect();
 
 				if lines.len() > 1 {
-					println!("  result:");
+					println!("  found:");
 					for line in lines.iter() {
 						println!("   {}", line);
 					}
 				} else {
-					println!("  result: {}", lines[0]);
+					println!("  found: {}", lines[0]);
 				}
 
 				println!("  ---");

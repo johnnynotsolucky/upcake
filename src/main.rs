@@ -38,10 +38,6 @@ struct Opt {
 	config: String,
 }
 
-// fn fold_kv_map(mut state: HashMap<String, String>, val: &str) -> Result<HashMap<String, String>> {
-// state
-// }
-
 fn main() -> Result<()> {
 	let opt = Opt::from_args();
 	let requests: Vec<RequestConfig> = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;

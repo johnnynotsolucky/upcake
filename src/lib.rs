@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fs;
 use std::future::Future;
 use std::pin::Pin;
 use std::str;
@@ -219,9 +220,15 @@ where
 	};
 
 	let url = handlebars.render_template(&request_config.url, &*context.lock().unwrap())?;
-	let data = match request_config.data {
-		Some(ref data) => Some(handlebars.render_template(data, &*context.lock().unwrap())?),
-		None => None,
+
+	let data = if let Some(ref data) = request_config.data {
+		let data = match data.strip_prefix('@') {
+			Some(path) => fs::read_to_string(path)?,
+			None => data.clone(),
+		};
+		Some(handlebars.render_template(&data, &*context.lock().unwrap())?)
+	} else {
+		None
 	};
 
 	let httpstat_config = HttpstatConfig {
@@ -231,7 +238,7 @@ where
 		connect_timeout: config.connect_timeout.map(Duration::from_millis),
 		max_response_size: config.max_response_size,
 
-		request: request_config.request_method.clone(),
+		request_method: request_config.request_method.clone().into(),
 		url,
 		data,
 		headers,

@@ -613,7 +613,7 @@ dependencies = [
 [[package]]
 name = "httpstat"
 version = "0.1.0"
-source = "git+https://github.com/johnnynotsolucky/rust-httpstat#b140ff66e84df7f5392d6fd7d32ad7efa22961e8"
+source = "git+https://github.com/johnnynotsolucky/rust-httpstat#b1f1764c969a9b6fa30d35e1f03373c3435abc58"
 dependencies = [
  "anyhow",
  "curl",

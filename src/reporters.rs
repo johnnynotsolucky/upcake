@@ -2,17 +2,6 @@ use crate::assertions::AssertionResult;
 use crate::RequestConfig;
 
 pub trait Reporter {
-	fn start(&mut self);
-	fn step_suite(&mut self, request_config: &RequestConfig);
-	fn step_result(&mut self, result: AssertionResult);
-	fn bail(&mut self, reason: String);
-	fn end(&mut self);
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct NoopReporter;
-
-impl Reporter for NoopReporter {
 	fn start(&mut self) {}
 
 	fn step_suite(&mut self, _request_config: &RequestConfig) {}
@@ -22,6 +11,59 @@ impl Reporter for NoopReporter {
 	fn bail(&mut self, _reason: String) {}
 
 	fn end(&mut self) {}
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NoopReporter;
+
+impl Reporter for NoopReporter {}
+
+#[derive(Debug, Clone, Default)]
+pub struct SimpleReporter;
+
+impl Reporter for SimpleReporter {
+	fn step_suite(&mut self, request_config: &RequestConfig) {
+		if let Some(ref name) = request_config.name {
+			println!("{}", name);
+		} else {
+			println!("{} {}", request_config.request_method, request_config.url);
+		}
+	}
+
+	fn step_result(&mut self, result: AssertionResult) {
+		match result {
+			AssertionResult::Skip(assertion, reason) => {
+				println!("  🟰 {} - {} ", assertion, reason);
+			}
+			AssertionResult::Success(assertion, _value) => {
+				println!("  ✔ {}", assertion);
+			}
+			AssertionResult::Failure(assertion, value) => {
+				println!("  ✖ {}", assertion);
+
+				let message = serde_yaml::to_string(&value).unwrap();
+
+				// Skip 1 to remove serde_yamls ---
+				let lines: Vec<&str> = message.lines().skip(1).collect();
+
+				if lines.len() > 1 {
+					println!("    found:");
+					for line in lines.iter() {
+						println!("      {}", line);
+					}
+				} else {
+					println!("    found: {}", lines[0]);
+				}
+			}
+			AssertionResult::FailureOther(Some(assertion), message) => {
+				println!("  ✖ {}", assertion);
+				println!("    message: {}", message);
+			}
+			AssertionResult::FailureOther(None, message) => {
+				println!("  ✖ {}", message);
+			}
+		}
+	}
 }
 
 #[derive(Debug, Clone, Default)]

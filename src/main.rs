@@ -4,7 +4,7 @@ use serde_yaml::Mapping;
 use std::fs;
 use structopt::StructOpt;
 
-use upcake::reporters::TapReporter;
+use upcake::reporters::SimpleReporter;
 use upcake::{upcake, Config, RequestConfig};
 
 #[derive(Debug, Clone, StructOpt)]
@@ -72,6 +72,6 @@ fn main() -> Result<()> {
 		}
 	}
 
-	let mut reporter = TapReporter::new();
+	let mut reporter = SimpleReporter;
 	block_on(upcake(config, requests, Some(context), &mut reporter))
 }

@@ -28,6 +28,7 @@ pub struct RequestConfig {
 	/// Name of the request
 	pub name: Option<String>,
 	/// List of request names which this request requires before it can run
+	#[serde(default)]
 	pub depends: Vec<String>,
 	/// Specify the request command to use, i.e. "GET"
 	#[serde(default = "default_request_method")]

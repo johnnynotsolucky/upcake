@@ -55,15 +55,18 @@ fn main() -> Result<()> {
 	if let Some(extra_vars) = opt.extra_vars {
 		for var in extra_vars.into_iter() {
 			if let Some(path) = var.strip_prefix('@') {
+				// Fetch extra vars stored in a YAML file
 				let yaml = serde_yaml::from_str::<Mapping>(&fs::read_to_string(&path)?)?;
 				for (k, v) in yaml.into_iter() {
 					context.insert(k, v);
 				}
 			} else if let Ok(yaml) = serde_yaml::from_str::<Mapping>(&var) {
+				// Set extra vars from YAML passed in through args
 				for (k, v) in yaml.into_iter() {
 					context.insert(k, v);
 				}
 			} else if let Some((k, v)) = var.split_once('=') {
+				// Set extra vars from key/value pairs passed in through args
 				context.insert(k.into(), v.into());
 			}
 		}

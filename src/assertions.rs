@@ -58,7 +58,7 @@ pub enum AssertionResult {
 	/// Failure not related to the assertion
 	FailureOther(
 		/// Assertion configuration used
-		AssertionConfig,
+		Option<AssertionConfig>,
 		/// Failure reason
 		String,
 	),
@@ -88,8 +88,12 @@ pub enum AssertionConfig {
 	Exists(RequestAssertionConfig<Exists>),
 	#[serde(rename = "greater-than")]
 	GreaterThan(RequestAssertionConfig<GreaterThan>),
+	#[serde(rename = "greater-than-equal")]
+	GreaterThanEqual(RequestAssertionConfig<GreaterThanEqual>),
 	#[serde(rename = "less-than")]
 	LessThan(RequestAssertionConfig<LessThan>),
+	#[serde(rename = "less-than-equal")]
+	LessThanEqual(RequestAssertionConfig<LessThanEqual>),
 }
 
 impl AssertionConfig {
@@ -116,7 +120,7 @@ impl AssertionConfig {
 			}
 		} else {
 			Ok(AssertionResult::FailureOther(
-				self.clone(),
+				Some(self.clone()),
 				"Invalid path".into(),
 			))
 		}
@@ -132,6 +136,8 @@ impl AssertionConfig {
 			Self::Exists(assertion) => assertion,
 			Self::GreaterThan(assertion) => assertion,
 			Self::LessThan(assertion) => assertion,
+			Self::GreaterThanEqual(assertion) => assertion,
+			Self::LessThanEqual(assertion) => assertion,
 		}
 	}
 
@@ -151,6 +157,8 @@ impl fmt::Display for AssertionConfig {
 			Self::Exists(assertion) => assertion.fmt(f),
 			Self::GreaterThan(assertion) => assertion.fmt(f),
 			Self::LessThan(assertion) => assertion.fmt(f),
+			Self::GreaterThanEqual(assertion) => assertion.fmt(f),
+			Self::LessThanEqual(assertion) => assertion.fmt(f),
 		}
 	}
 }
@@ -212,6 +220,7 @@ impl fmt::Display for RequestAssertionConfig<Between> {
 /// Assert that a value equals the given value
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Equal {
+	/// Value to assert against
 	value: YamlValue,
 }
 
@@ -238,6 +247,7 @@ impl fmt::Display for RequestAssertionConfig<Equal> {
 /// Assert that a value is not equal to the given value
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct NotEqual {
+	/// Value to assert against
 	value: YamlValue,
 }
 
@@ -264,34 +274,41 @@ impl fmt::Display for RequestAssertionConfig<NotEqual> {
 /// Assert that a value is greater than the given value
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThan {
+	/// Value to assert against
 	pub value: YamlValue,
-	// TODO make a GreaterThanEqual struct
-	// Whether to include [`GreaterThan::value`]
-	#[serde(default)]
-	pub inclusive: bool,
 }
 
 impl Assert for GreaterThan {
 	fn assert(&self, value: &YamlValue) -> bool {
-		if self.inclusive {
-			*value >= self.value
-		} else {
-			*value > self.value
-		}
+		*value > self.value
 	}
 }
 
 impl fmt::Display for RequestAssertionConfig<GreaterThan> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "greater than {}", value_to_string(&self.assertion.value),)
+	}
+}
+
+/// Assert that a value is greater or equal to the given value
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct GreaterThanEqual {
+	/// Value to assert against
+	pub value: YamlValue,
+}
+
+impl Assert for GreaterThanEqual {
+	fn assert(&self, value: &YamlValue) -> bool {
+		*value >= self.value
+	}
+}
+
+impl fmt::Display for RequestAssertionConfig<GreaterThanEqual> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"greater than {} ({})",
+			"greater than or equal to {}",
 			value_to_string(&self.assertion.value),
-			if self.assertion.inclusive {
-				"inclusive"
-			} else {
-				"exclusive"
-			}
 		)
 	}
 }
@@ -300,33 +317,38 @@ impl fmt::Display for RequestAssertionConfig<GreaterThan> {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThan {
 	pub value: YamlValue,
-	// TODO make a LessThanEqual struct
-	// Whether to include [`LessThan::value`]
-	#[serde(default)]
-	pub inclusive: bool,
 }
 
 impl Assert for LessThan {
 	fn assert(&self, value: &YamlValue) -> bool {
-		if self.inclusive {
-			*value <= self.value
-		} else {
-			*value < self.value
-		}
+		*value < self.value
 	}
 }
 
 impl fmt::Display for RequestAssertionConfig<LessThan> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "less than {}", value_to_string(&self.assertion.value),)
+	}
+}
+
+/// Assert that a value is less than or equal to the given value
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct LessThanEqual {
+	pub value: YamlValue,
+}
+
+impl Assert for LessThanEqual {
+	fn assert(&self, value: &YamlValue) -> bool {
+		*value <= self.value
+	}
+}
+
+impl fmt::Display for RequestAssertionConfig<LessThanEqual> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"less than {} ({})",
+			"less than or equal {}",
 			value_to_string(&self.assertion.value),
-			if self.assertion.inclusive {
-				"inclusive"
-			} else {
-				"exclusive"
-			}
 		)
 	}
 }
@@ -1098,25 +1120,18 @@ mod tests {
 	}
 
 	#[test]
-	fn assert_greater_than_is_gt_exclusive() -> Result<()> {
+	fn assert_greater_than_is_gt() -> Result<()> {
 		let test_cases = vec![
-			(as_value(1), as_value(0), "1 is greater than 0, exclusive"),
-			(
-				as_value(0.1),
-				as_value(0),
-				"0.1 is greater than 0, exclusive",
-			),
-			(as_value(0), as_value(-1), "0 is greater than -1, exclusive"),
-			(as_value(1), as_value(-1), "1 is greater than -1, exclusive"),
+			(as_value(1), as_value(0), "1 is greater than 0"),
+			(as_value(0.1), as_value(0), "0.1 is greater than 0"),
+			(as_value(0), as_value(-1), "0 is greater than -1"),
+			(as_value(1), as_value(-1), "1 is greater than -1"),
 		];
 
 		for (input, value, msg) in test_cases {
 			let input = serde_yaml::to_value(input)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = GreaterThan {
-				value,
-				inclusive: false,
-			};
+			let assertion = GreaterThan { value };
 			assert!(assertion.assert(&input), "{}", msg);
 		}
 
@@ -1124,37 +1139,18 @@ mod tests {
 	}
 
 	#[test]
-	fn assert_greater_than_is_not_gt_exclusive() -> Result<()> {
+	fn assert_greater_than_is_not_gt() -> Result<()> {
 		let test_cases = vec![
-			(
-				as_value(0),
-				as_value(0),
-				"0 is not greater than 0, exclusive",
-			),
-			(
-				as_value(0),
-				as_value(0.1),
-				"0 is not greater than 0.1, exclusive",
-			),
-			(
-				as_value(-1),
-				as_value(0),
-				"-1 is not greater than 0, exclusive",
-			),
-			(
-				as_value(-1),
-				as_value(1),
-				"-1 is not greater than 1, exclusive",
-			),
+			(as_value(0), as_value(0), "0 is not greater than 0"),
+			(as_value(0), as_value(0.1), "0 is not greater than 0.1"),
+			(as_value(-1), as_value(0), "-1 is not greater than 0"),
+			(as_value(-1), as_value(1), "-1 is not greater than 1"),
 		];
 
 		for (input, value, msg) in test_cases {
 			let input = serde_yaml::to_value(input)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = GreaterThan {
-				value,
-				inclusive: false,
-			};
+			let assertion = GreaterThan { value };
 			assert!(!assertion.assert(&input), "{}", msg);
 		}
 
@@ -1162,143 +1158,36 @@ mod tests {
 	}
 
 	#[test]
-	fn assert_greater_than_is_gt_inclusive() -> Result<()> {
+	fn assert_greater_than_equal_is_gte() -> Result<()> {
 		let test_cases = vec![
-			(as_value(1), as_value(1), "1 is greater than 1, inclusive"),
+			(as_value(1), as_value(1), "1 is greater than or equal to 1"),
 			(
 				as_value(0.0),
 				as_value(0.0),
-				"0.0 is greater than 0.0, inclusive",
+				"0.0 is greater than or equal to 0.0",
 			),
-			(as_value(1), as_value(0), "1 is greater than 0, inclusive"),
+			(as_value(1), as_value(0), "1 is greater than or equal to 0"),
 			(
 				as_value(0.1),
 				as_value(0),
-				"0.1 is greater than 0, inclusive",
-			),
-			(as_value(0), as_value(-1), "0 is greater than -1, inclusive"),
-			(as_value(1), as_value(-1), "1 is greater than -1, inclusive"),
-		];
-
-		for (input, value, msg) in test_cases {
-			let input = serde_yaml::to_value(input)?;
-			let value = serde_yaml::to_value(value)?;
-			let assertion = GreaterThan {
-				value,
-				inclusive: true,
-			};
-			assert!(assertion.assert(&input), "{}", msg);
-		}
-
-		Ok(())
-	}
-
-	#[test]
-	fn assert_greater_than_is_not_gt_inclusive() -> Result<()> {
-		let test_cases = vec![
-			(
-				as_value(0),
-				as_value(0.1),
-				"0 is not greater than 0.1, inclusive",
-			),
-			(
-				as_value(-1),
-				as_value(0),
-				"-1 is not greater than 0, inclusive",
-			),
-		];
-
-		for (input, value, msg) in test_cases {
-			let input = serde_yaml::to_value(input)?;
-			let value = serde_yaml::to_value(value)?;
-			let assertion = GreaterThan {
-				value,
-				inclusive: true,
-			};
-			assert!(!assertion.assert(&input), "{}", msg);
-		}
-
-		Ok(())
-	}
-
-	#[test]
-	fn assert_less_than_is_lt_exclusive() -> Result<()> {
-		let test_cases = vec![
-			(as_value(0), as_value(1), "0 is less than 1, exclusive"),
-			(as_value(0), as_value(0.1), "0 is less than 0.1, exclusive"),
-			(as_value(-1), as_value(0), "-1 is less than 0, exclusive"),
-			(as_value(-1), as_value(1), "-1 is less than 1, exclusive"),
-		];
-
-		for (input, value, msg) in test_cases {
-			let input = serde_yaml::to_value(input)?;
-			let value = serde_yaml::to_value(value)?;
-			let assertion = LessThan {
-				value,
-				inclusive: false,
-			};
-			assert!(assertion.assert(&input), "{}", msg);
-		}
-
-		Ok(())
-	}
-
-	#[test]
-	fn assert_less_than_is_not_lt_exclusive() -> Result<()> {
-		let test_cases = vec![
-			(as_value(0), as_value(0), "0 is not less than 0, exclusive"),
-			(
-				as_value(0.1),
-				as_value(0),
-				"0.1 is not less than 0, exclusive",
+				"0.1 is greater than or equal to 0",
 			),
 			(
 				as_value(0),
 				as_value(-1),
-				"0 is not less than -1, exclusive",
+				"0 is greater than or equal to -1",
 			),
 			(
 				as_value(1),
 				as_value(-1),
-				"1 is not less than -1, exclusive",
+				"1 is greater than or equal to -1",
 			),
 		];
 
 		for (input, value, msg) in test_cases {
 			let input = serde_yaml::to_value(input)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = LessThan {
-				value,
-				inclusive: false,
-			};
-			assert!(!assertion.assert(&input), "{}", msg);
-		}
-
-		Ok(())
-	}
-
-	#[test]
-	fn assert_less_than_is_lt_inclusive() -> Result<()> {
-		let test_cases = vec![
-			(as_value(1), as_value(1), "1 is less than 1, inclusive"),
-			(
-				as_value(0.0),
-				as_value(0.0),
-				"0.0 is less than 0.0, inclusive",
-			),
-			(as_value(0), as_value(1), "0 is less than 1, inclusive"),
-			(as_value(0), as_value(0.1), "0 is less than 0.1, inclusive"),
-			(as_value(-1), as_value(0), "-1 is less than 0, inclusive"),
-			(as_value(-1), as_value(1), "-1 is less than 1, inclusive"),
-		];
-
-		for (input, value, msg) in test_cases {
-			let input = serde_yaml::to_value(input)?;
-			let value = serde_yaml::to_value(value)?;
-			let assertion = LessThan {
-				value,
-				inclusive: true,
-			};
+			let assertion = GreaterThanEqual { value };
 			assert!(assertion.assert(&input), "{}", msg);
 		}
 
@@ -1306,27 +1195,112 @@ mod tests {
 	}
 
 	#[test]
-	fn assert_less_than_is_not_lt_inclusive() -> Result<()> {
+	fn assert_greater_than_equal_is_not_gte() -> Result<()> {
 		let test_cases = vec![
 			(
-				as_value(0.1),
 				as_value(0),
-				"0.1 is not less than 0, inclusive",
+				as_value(0.1),
+				"0 is not greater than or equal to 0.1",
 			),
 			(
-				as_value(0),
 				as_value(-1),
-				"0 is not less than -1, inclusive",
+				as_value(0),
+				"-1 is not greater than or equal to 0",
 			),
 		];
 
 		for (input, value, msg) in test_cases {
 			let input = serde_yaml::to_value(input)?;
 			let value = serde_yaml::to_value(value)?;
-			let assertion = LessThan {
-				value,
-				inclusive: true,
-			};
+			let assertion = GreaterThanEqual { value };
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_less_than_is_lt() -> Result<()> {
+		let test_cases = vec![
+			(as_value(0), as_value(1), "0 is less than 1"),
+			(as_value(0), as_value(0.1), "0 is less than 0.1"),
+			(as_value(-1), as_value(0), "-1 is less than 0"),
+			(as_value(-1), as_value(1), "-1 is less than 1"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan { value };
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_less_than_is_not_lt() -> Result<()> {
+		let test_cases = vec![
+			(as_value(0), as_value(0), "0 is not less than 0"),
+			(as_value(0.1), as_value(0), "0.1 is not less than 0"),
+			(as_value(0), as_value(-1), "0 is not less than -1"),
+			(as_value(1), as_value(-1), "1 is not less than -1"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThan { value };
+			assert!(!assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_less_than_equal_is_lte() -> Result<()> {
+		let test_cases = vec![
+			(as_value(1), as_value(1), "1 is less than or equal to 1"),
+			(
+				as_value(0.0),
+				as_value(0.0),
+				"0.0 is less than or equal to 0.0",
+			),
+			(as_value(0), as_value(1), "0 is less than or equal to 1"),
+			(as_value(0), as_value(0.1), "0 is less than or equal to 0.1"),
+			(as_value(-1), as_value(0), "-1 is less than or equal to 0"),
+			(as_value(-1), as_value(1), "-1 is less than or equal to 1"),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThanEqual { value };
+			assert!(assertion.assert(&input), "{}", msg);
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn assert_less_than_equal_is_not_lte() -> Result<()> {
+		let test_cases = vec![
+			(
+				as_value(0.1),
+				as_value(0),
+				"0.1 is not less than or equal to 0",
+			),
+			(
+				as_value(0),
+				as_value(-1),
+				"0 is not less than or equal to -1",
+			),
+		];
+
+		for (input, value, msg) in test_cases {
+			let input = serde_yaml::to_value(input)?;
+			let value = serde_yaml::to_value(value)?;
+			let assertion = LessThanEqual { value };
 			assert!(!assertion.assert(&input), "{}", msg);
 		}
 

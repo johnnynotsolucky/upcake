@@ -19,7 +19,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
 
-use assertions::{AssertionConfig, Equal, RequestAssertionConfig};
+use assertions::{AssertionConfig, AssertionResult, Equal, RequestAssertionConfig};
 use reporters::Reporter;
 
 /// Configuration for individual requests
@@ -27,25 +27,24 @@ use reporters::Reporter;
 pub struct RequestConfig {
 	/// Name of the request
 	pub name: Option<String>,
-	/// Vec of requests which this request depends on
-	#[serde(default)]
+	/// List of request names which this request requires before it can run
 	pub depends: Vec<String>,
 	/// Specify the request command to use, i.e. "GET"
 	#[serde(default = "default_request_method")]
 	pub request_method: String,
 	/// Data to pass with the request
 	///
-	/// Contents are rendered with Handlebars.
-	///
 	/// Send the contents of a file by prefixing with an @: `"@/path/to/file.json"`
+	///
+	/// Contents are rendered with [`mod@handlebars`].
 	pub data: Option<String>,
 	/// Key/Value pairs of headers to send with the request
 	///
-	/// Header values are rendered with Handlebars.
+	/// Header values are rendered with [`mod@handlebars`].
 	pub headers: Option<HashMap<String, String>>,
 	/// The url to request
 	///
-	/// The url string is rendered with Handlebars.
+	/// The url string is rendered with [`mod@handlebars`].
 	pub url: String,
 	/// A list of assertions to perform on the response
 	#[serde(default = "default_assertions")]
@@ -124,21 +123,32 @@ impl From<HttpstatTiming> for Timing {
 	}
 }
 
+/// Response content variations
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum ResponseContent {
+	/// No content returned
 	NoContent,
-	Other(String),
+	/// JSON content
 	Json(JsonValue),
+	/// Content which could not be parsed
+	Other(String),
 }
 
+/// Wraps [`HttpstatResult`] with more useful properties
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct StatResult {
+	/// HTTP version used
 	pub http_version: String,
+	/// HTTP response code from target host
 	pub response_code: i32,
+	/// HTTP response message from target host
 	pub response_message: Option<String>,
+	/// Response headers
 	pub headers: Vec<Header>,
+	/// Timing data
 	pub timing: Timing,
+	/// Possibly parsed response content
 	pub content: ResponseContent,
 }
 
@@ -155,8 +165,10 @@ impl From<HttpstatResult> for StatResult {
 
 		if let Ok(body) = str::from_utf8(&result.body[..]) {
 			if let Ok(json_content) = serde_json::from_str(body) {
+				// Attempt to parse json content
 				stat_result.content = ResponseContent::Json(json_content);
 			} else {
+				// Otherwise set the content as a string
 				stat_result.content = ResponseContent::Other(body.into());
 			}
 		}
@@ -165,8 +177,12 @@ impl From<HttpstatResult> for StatResult {
 	}
 }
 
+/// A wrapper for [`StatResult`] which is serialized down to only header and content response data.
+///
+/// Available in templates through `requests.{name}`
 #[derive(Debug, Clone)]
 pub struct ResponseData {
+	/// Wrapped [`StatResult`]
 	inner: Arc<StatResult>,
 }
 
@@ -190,10 +206,18 @@ impl Serialize for ResponseData {
 
 #[derive(Debug, Error)]
 pub enum Error {
-	#[error("{0:?}")]
+	/// Request failed
+	#[error("Request failed: {1:?}")]
 	RequestError(Arc<RequestConfig>, String),
+	/// Dependencies for a request failed, possibly with [`Error::RequestError`]
+	#[error("Request dependencies failed: {1:?}")]
+	DependencyError(Arc<RequestConfig>, String),
 }
 
+/// Run the request
+///
+/// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
+/// data.
 async fn run_request<C>(
 	config: Arc<Config>,
 	request_config: Arc<RequestConfig>,
@@ -204,6 +228,7 @@ where
 {
 	let handlebars = Handlebars::new();
 
+	// Render header values with the template context
 	let headers = match request_config.headers {
 		Some(ref headers) => {
 			let mut joined_headers: Vec<String> = Vec::new();
@@ -222,10 +247,13 @@ where
 	let url = handlebars.render_template(&request_config.url, &*context.lock().unwrap())?;
 
 	let data = if let Some(ref data) = request_config.data {
+		// Read in a file for request content if the data property is prefixed with `'@'`,
+		// otherwise use whatever is set on [`RequestConfig::data`].
 		let data = match data.strip_prefix('@') {
 			Some(path) => fs::read_to_string(path)?,
 			None => data.clone(),
 		};
+
 		Some(handlebars.render_template(&data, &*context.lock().unwrap())?)
 	} else {
 		None
@@ -286,9 +314,21 @@ where
 		let this = unsafe { self.get_unchecked_mut() };
 		let states = &mut this.states;
 
+		let error_set: HashSet<_> = states
+			.iter()
+			.filter_map(|(key, state)| match state {
+				State::Done(ref result) => match **result {
+					Err(_) => Some(key),
+					_ => None,
+				},
+				_ => None,
+			})
+			.cloned()
+			.collect();
+
 		// Start any requests which have no depends or have depends which have all completed
 		// successfully.
-		let done_set: HashSet<_> = states
+		let success_set: HashSet<_> = states
 			.iter()
 			.filter_map(|(key, state)| match state {
 				State::Done(ref result) => match **result {
@@ -302,11 +342,30 @@ where
 
 		for (_, state) in states.iter_mut() {
 			if let State::Wait(request_config) = state {
-				// TODO validate that the depends keys actually exist
+				// TODO validate that the depends keys actually exist in states otherwise a request
+				// could wait indefinitely.
+				//
+				// Get the intersection of the request dependencies and the requests which have
+				// completed successfully. If they intersection set matches the dependency set,
+				// then this request can be started.
 				let depends_set: HashSet<_> = request_config.depends.clone().into_iter().collect();
-				let intersection: HashSet<_> = done_set.intersection(&depends_set).collect();
+				let success_intersection: HashSet<_> =
+					success_set.intersection(&depends_set).collect();
+				let error_intersection: HashSet<_> = error_set.intersection(&depends_set).collect();
 
-				if intersection.len() == depends_set.len() {
+				if !error_intersection.is_empty() {
+					// Update this requests state so that it can be polled.
+					*state = State::Done(Box::new(Err(Error::DependencyError(
+						request_config.clone(),
+						error_intersection
+							.iter()
+							.map(|k| (&**k).clone())
+							.collect::<Vec<String>>()
+							.join(", "),
+					)
+					.into())));
+				} else if success_intersection.len() == depends_set.len() {
+					// Update this requests state so that it can be polled.
 					*state = State::Future(Box::pin(run_request(
 						this.config.clone(),
 						request_config.clone(),
@@ -319,7 +378,6 @@ where
 		let mut all_ready = true;
 
 		for (name, state) in states.iter_mut() {
-			// Immediately poll...?
 			match state {
 				State::Future(future) => {
 					match unsafe { Pin::new_unchecked(future) }.poll(context) {
@@ -350,6 +408,7 @@ where
 		}
 
 		if all_ready {
+			// We don't need states anymore, shadow the variable and map into the result Vec.
 			let states = std::mem::take(states);
 			let results = states
 				.into_values()
@@ -366,18 +425,23 @@ where
 	}
 }
 
+/// Context applied to request data such as headers, urls, content body.
 #[derive(Serialize, Debug, Clone)]
 struct TemplateContext<C>
 where
 	C: Serialize,
 {
+	/// Optional user context
 	user: Option<C>,
+	/// Map of available environment variables
 	env: HashMap<String, String>,
-	/// requests is serialized when rendering templates, but we need an [`Arc`] so that we can pass
-	/// the result around internally.
+	// `requests` is serialized when rendering templates, but we need an [`Arc`] so that we can
+	// pass the result around internally.
+	/// Map of completed and successful request responses
 	requests: HashMap<String, ResponseData>,
 }
 
+///
 pub async fn upcake<C: 'static>(
 	config: Config,
 	requests: Vec<RequestConfig>,
@@ -389,6 +453,8 @@ where
 {
 	let mut request_config_map = HashMap::new();
 
+	// Move requests into a map with the request names as keys, or if the name is not set, the
+	// string representation of the request's index in the iterator.
 	for (idx, request_config) in requests.into_iter().enumerate() {
 		// TODO probably make sure name is not something silly like "" or " "
 		let name = request_config
@@ -401,6 +467,8 @@ where
 	reporter.start();
 
 	let requests = Requests {
+		// Set up the template context to include the optional user context, environment variables
+		// and an empty map of requests.
 		context: Arc::new(Mutex::new(TemplateContext {
 			user: context,
 			env: env::vars().collect(),
@@ -422,17 +490,16 @@ where
 				}
 			}
 			Err(error) => match error.downcast_ref::<Error>() {
-				Some(error) => match error {
-					Error::RequestError(request_config, error) => {
-						reporter.step_suite(request_config);
-						reporter.bail(error.to_string());
-						break;
-					}
-				},
+				Some(error) => {
+					let request_config = match error {
+						Error::RequestError(request_config, _) => request_config,
+						Error::DependencyError(request_config, _) => request_config,
+					};
+					reporter.step_suite(request_config);
+					reporter.step_result(AssertionResult::FailureOther(None, error.to_string()));
+				}
 				None => {
-					// TODO return an error which includes the request_config
-					reporter.bail(format!("{}", error));
-					break;
+					reporter.step_result(AssertionResult::FailureOther(None, format!("{}", error)));
 				}
 			},
 		}

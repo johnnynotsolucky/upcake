@@ -99,17 +99,24 @@ impl Reporter for TapReporter {
 
 				println!("  ---");
 			}
-			AssertionResult::FailureOther(assertion, message) => {
+			AssertionResult::FailureOther(Some(assertion), message) => {
 				println!("not ok {} - {}", self.assertion_count, assertion);
 				println!("  ---");
 				println!("  assertion: {}", assertion);
 				println!("  message: {}\n", message);
 				println!("  ---");
 			}
+			AssertionResult::FailureOther(None, message) => {
+				println!("not ok {} - {}", self.assertion_count, message);
+			}
 		}
 	}
 
 	fn bail(&mut self, reason: String) {
+		if self.bailed {
+			return;
+		}
+
 		self.bailed = true;
 		println!("Bail out! {}", reason);
 	}

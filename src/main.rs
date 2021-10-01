@@ -1,11 +1,37 @@
 use anyhow::Result;
 use futures::executor::block_on;
+use serde::Deserialize;
 use serde_yaml::Mapping;
 use std::fs;
 use structopt::StructOpt;
 
 use upcake::reporters::SimpleReporter;
-use upcake::{upcake, Config, RequestConfig};
+use upcake::{upcake, Config as UpcakeConfig, RequestConfig};
+
+/// Configuration applied to all requests
+#[derive(Deserialize, Default, Debug, Clone)]
+pub struct Config {
+	/// Follow redirects
+	#[serde(default)]
+	pub location: bool,
+	/// Allow insecure server connections when using SSL
+	#[serde(default)]
+	pub insecure: bool,
+	/// Maximum time allowed for connection
+	#[serde(default)]
+	pub connect_timeout: Option<u64>,
+	/// Set additional variables as key=value or YAML. For a file prepend with @
+	#[serde(default)]
+	extra_vars: Option<Mapping>,
+	/// Verbose output
+	#[serde(default)]
+	pub verbose: bool,
+	/// Maximum response size in bytes
+	#[serde(default)]
+	pub max_response_size: Option<usize>,
+	/// Requests to run
+	pub requests: Vec<RequestConfig>,
+}
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt()]
@@ -38,19 +64,38 @@ struct Opt {
 	config: String,
 }
 
+impl Opt {
+	fn merge_onto_config(&self, config: &mut Config) {
+		if self.location {
+			config.location = self.location;
+		}
+		if self.insecure {
+			config.insecure = self.insecure;
+		}
+		if let Some(timeout) = self.connect_timeout {
+			config.connect_timeout = Some(timeout);
+		}
+		if self.verbose {
+			config.verbose = self.verbose;
+		}
+		if let Some(max_response_size) = self.max_response_size {
+			config.max_response_size = Some(max_response_size);
+		}
+	}
+}
+
 fn main() -> Result<()> {
 	let opt = Opt::from_args();
-	let requests: Vec<RequestConfig> = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
+	let mut config: Config = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
 
-	let config = Config {
-		location: opt.location,
-		insecure: opt.insecure,
-		connect_timeout: opt.connect_timeout,
-		verbose: opt.verbose,
-		max_response_size: opt.max_response_size,
-	};
+	opt.merge_onto_config(&mut config);
 
 	let mut context = Mapping::new();
+	if let Some(extra_vars) = config.extra_vars {
+		for (k, v) in extra_vars.iter() {
+			context.insert(k.clone(), v.clone());
+		}
+	}
 
 	if let Some(extra_vars) = opt.extra_vars {
 		for var in extra_vars.into_iter() {
@@ -72,11 +117,15 @@ fn main() -> Result<()> {
 		}
 	}
 
+	let config = UpcakeConfig {
+		location: config.location,
+		insecure: config.insecure,
+		connect_timeout: config.connect_timeout,
+		verbose: config.verbose,
+		max_response_size: config.max_response_size,
+		requests: config.requests,
+	};
+
 	let mut reporter = SimpleReporter;
-	block_on(upcake(
-		config,
-		requests.into_iter(),
-		Some(context),
-		&mut reporter,
-	))
+	block_on(upcake(config, Some(context), &mut reporter))
 }

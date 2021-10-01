@@ -95,6 +95,8 @@ pub struct Config {
 	pub verbose: bool,
 	/// Maximum response size in bytes
 	pub max_response_size: Option<usize>,
+	/// Requests to run
+	pub requests: Vec<RequestConfig>,
 }
 
 /// Timing results for a request
@@ -314,7 +316,7 @@ where
 type RequestResult = Result<(Arc<RequestConfig>, Arc<StatResult>)>;
 type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
-struct Requests<C>
+struct RequestsFuture<C>
 where
 	C: Serialize,
 {
@@ -323,113 +325,165 @@ where
 	states: HashMap<String, RequestState>,
 }
 
-impl<C: 'static> Future for Requests<C>
+impl<C> RequestsFuture<C>
 where
 	C: Serialize,
+{
+	fn new(mut config: Config, context: Option<C>) -> Self {
+		let mut request_config_map = HashMap::new();
+
+		let requests = std::mem::take(&mut config.requests);
+		// Move requests into a map with the request names as keys, or if the name is not set, the
+		// string representation of the request's index in the iterator.
+		for (idx, request_config) in requests.into_iter().enumerate() {
+			let name = request_config
+				.name
+				.clone()
+				.unwrap_or_else(|| format!("{}", idx));
+			request_config_map.insert(name, State::Wait(Arc::new(request_config)));
+		}
+		Self {
+			// Set up the template context to include the optional user context, environment variables
+			// and an empty map of requests.
+			context: Arc::new(Mutex::new(TemplateContext {
+				user: context,
+				env: env::vars().collect(),
+				requests: HashMap::new(),
+			})),
+			config: Arc::new(config),
+			states: request_config_map,
+		}
+	}
+}
+
+/// Iterate over request states and check whether each waiting state should be marked as running.
+fn mark_ready_states<C>(requests_future: &mut RequestsFuture<C>)
+where
+	C: Serialize + 'static,
+{
+	let states = &mut requests_future.states;
+	// Create sets of errored and successful requests to match against request dependencies
+	// when checking whether a request can be started.
+	//
+	// TODO Not super happy about all the cloning happening over here.
+	let mut error_set: HashSet<String> = HashSet::new();
+	let mut success_set: HashSet<String> = HashSet::new();
+	for (key, state) in states.iter() {
+		if let State::Done(result) = state {
+			//    👇 result is a reference to a Box
+			match **result {
+				Ok(_) => success_set.insert(key.clone()),
+				Err(_) => error_set.insert(key.clone()),
+			};
+		}
+	}
+
+	for (_, state) in states.iter_mut() {
+		if let State::Wait(request_config) = state {
+			// TODO validate that the requires keys actually exist in states otherwise a request
+			// could wait indefinitely.
+			//
+			// Get the intersection of the request dependencies and the requests which have
+			// completed successfully. If they intersection set matches the requires set,
+			// then this request can be started.
+			let requires_set: HashSet<_> = request_config.requires.iter().cloned().collect();
+
+			let success_intersection: HashSet<_> =
+				success_set.intersection(&requires_set).collect();
+			let error_intersection: HashSet<_> = error_set.intersection(&requires_set).collect();
+
+			if !error_intersection.is_empty() {
+				// Update this requests state so that it is Done and skips polling.
+				*state = State::Done(Box::new(Err(Error::DependencyError(
+					request_config.clone(),
+					// Non-exhaustive list of dependencies which failed before attempting to
+					// start this request.
+					error_intersection
+						.into_iter()
+						.cloned()
+						.collect::<Vec<String>>()
+						.join(", "),
+				)
+				.into())));
+			} else if success_intersection.len() == requires_set.len() {
+				// This request is ready to start, update this requests state so that it can be
+				// polled.
+				*state = State::Future(Box::pin(run_request(
+					requests_future.config.clone(),
+					request_config.clone(),
+					requests_future.context.clone(),
+				)));
+			}
+		}
+	}
+}
+
+/// Iterate over running futures and update their states if they're done.
+///
+/// Returns true if all states are done
+fn poll_states<C>(requests_future: &mut RequestsFuture<C>, context: &mut Context<'_>) -> bool
+where
+	C: Serialize + 'static,
+{
+	let states = &mut requests_future.states;
+	let mut all_ready = true;
+
+	for (name, state) in states.iter_mut() {
+		match state {
+			State::Future(future) => {
+				// This future can be polled
+				match Pin::new(future).poll(context) {
+					// If it is Ready, mark it's state as Done
+					Poll::Ready(result) => {
+						let result = Box::new(result);
+
+						// If there is an Ok result from the request future, add that to the
+						// TemplateContext under the name of the request.
+						if let Ok((_, ref stat_result)) = *result {
+							let mut context = requests_future.context.lock().unwrap();
+							context
+								.requests
+								.insert(name.clone(), ResponseData::from(stat_result.clone()));
+						}
+
+						*state = State::Done(result);
+					}
+					Poll::Pending => {
+						// If the request has started, but is still pending, mark the future
+						// as incomplete.
+						all_ready = false;
+						continue;
+					}
+				}
+			}
+			State::Wait(_) => {
+				// If the request is still waiting to start, mark the future as incomplete.
+				all_ready = false;
+				continue;
+			}
+			State::Done(_) => continue, // Ignore Done, there's no further work needed.
+		}
+	}
+
+	all_ready
+}
+
+impl<C> Future for RequestsFuture<C>
+where
+	C: Serialize + 'static,
 {
 	type Output = Result<Vec<RequestResult>>;
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-		let this = unsafe { self.get_unchecked_mut() };
-		let states = &mut this.states;
+		let mut this = unsafe { self.get_unchecked_mut() };
 
-		// Create sets of errored and successful requests to match against request dependencies
-		// when checking whether a request can be started.
-		// TODO Not super happy about all the cloning happening over here.
-		let mut error_set: HashSet<String> = HashSet::new();
-		let mut success_set: HashSet<String> = HashSet::new();
-		for (key, state) in states.iter() {
-			if let State::Done(result) = state {
-				//    👇 result is a reference to a Box
-				match **result {
-					Ok(_) => success_set.insert(key.clone()),
-					Err(_) => error_set.insert(key.clone()),
-				};
-			}
-		}
-
-		for (_, state) in states.iter_mut() {
-			if let State::Wait(request_config) = state {
-				// TODO validate that the requires keys actually exist in states otherwise a request
-				// could wait indefinitely.
-				//
-				// Get the intersection of the request dependencies and the requests which have
-				// completed successfully. If they intersection set matches the requires set,
-				// then this request can be started.
-				let requires_set: HashSet<_> = request_config.requires.iter().cloned().collect();
-
-				let success_intersection: HashSet<_> =
-					success_set.intersection(&requires_set).collect();
-				let error_intersection: HashSet<_> =
-					error_set.intersection(&requires_set).collect();
-
-				if !error_intersection.is_empty() {
-					// Update this requests state so that it is Done and skips polling.
-					*state = State::Done(Box::new(Err(Error::DependencyError(
-						request_config.clone(),
-						// Non-exhaustive list of dependencies which failed before attempting to
-						// start this request.
-						error_intersection
-							.into_iter()
-							.cloned()
-							.collect::<Vec<String>>()
-							.join(", "),
-					)
-					.into())));
-				} else if success_intersection.len() == requires_set.len() {
-					// Update this requests state so that it can be polled.
-					*state = State::Future(Box::pin(run_request(
-						this.config.clone(),
-						request_config.clone(),
-						this.context.clone(),
-					)));
-				}
-			}
-		}
-
-		let mut all_ready = true;
-
-		for (name, state) in states.iter_mut() {
-			match state {
-				State::Future(future) => {
-					// This future can be polled
-					match Pin::new(future).poll(context) {
-						// If it is Ready, mark it's state as Done
-						Poll::Ready(result) => {
-							let result = Box::new(result);
-
-							// If there is an Ok result from the request future, add that to the
-							// TemplateContext under the name of the request.
-							if let Ok((_, ref stat_result)) = *result {
-								let mut context = this.context.lock().unwrap();
-								context
-									.requests
-									.insert(name.clone(), ResponseData::from(stat_result.clone()));
-							}
-
-							*state = State::Done(result);
-						}
-						Poll::Pending => {
-							// If the request has started, but is still pending, mark the future
-							// as incomplete.
-							all_ready = false;
-							continue;
-						}
-					}
-				}
-				State::Wait(_) => {
-					// If the request is still waiting to start, mark the future as incomplete.
-					all_ready = false;
-					continue;
-				}
-				State::Done(_) => continue, // Ignore Done, there's no further work needed.
-			}
-		}
+		// Mark states which are ready to be polled.
+		mark_ready_states(&mut this);
 
 		// When all the states are the Ready variant, the results can be mapped to a list
-		if all_ready {
+		if poll_states(&mut this, context) {
 			// We don't need states anymore, shadow the variable and map into the result Vec.
-			let states = std::mem::take(states);
+			let states = std::mem::take(&mut this.states);
 			let results = states
 				.into_values()
 				.map(|state| match state {
@@ -462,43 +516,14 @@ where
 }
 
 ///
-pub async fn upcake<C: 'static, I, R>(
-	config: Config,
-	requests: I,
-	context: Option<C>,
-	reporter: &mut R,
-) -> Result<()>
+pub async fn upcake<C, R>(config: Config, context: Option<C>, reporter: &mut R) -> Result<()>
 where
-	I: Iterator<Item = RequestConfig>,
-	C: Serialize,
+	C: Serialize + 'static,
 	R: Reporter,
 {
-	let mut request_config_map = HashMap::new();
-
-	// Move requests into a map with the request names as keys, or if the name is not set, the
-	// string representation of the request's index in the iterator.
-	for (idx, request_config) in requests.into_iter().enumerate() {
-		let name = request_config
-			.name
-			.clone()
-			.unwrap_or_else(|| format!("{}", idx));
-		request_config_map.insert(name, State::Wait(Arc::new(request_config)));
-	}
-
 	reporter.start();
 
-	let requests = Requests {
-		// Set up the template context to include the optional user context, environment variables
-		// and an empty map of requests.
-		context: Arc::new(Mutex::new(TemplateContext {
-			user: context,
-			env: env::vars().collect(),
-			requests: HashMap::new(),
-		})),
-		config: Arc::new(config),
-		states: request_config_map,
-	};
-	let results = requests.await?;
+	let results = RequestsFuture::new(config, context).await?;
 
 	for result in results {
 		match result {

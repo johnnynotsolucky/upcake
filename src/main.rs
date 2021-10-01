@@ -73,5 +73,10 @@ fn main() -> Result<()> {
 	}
 
 	let mut reporter = SimpleReporter;
-	block_on(upcake(config, requests, Some(context), &mut reporter))
+	block_on(upcake(
+		config,
+		requests.into_iter(),
+		Some(context),
+		&mut reporter,
+	))
 }

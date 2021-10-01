@@ -5,6 +5,7 @@ use anyhow::Result;
 use handlebars::Handlebars;
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
+use serde::de::Deserializer;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -26,10 +27,11 @@ use reporters::Reporter;
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {
 	/// Name of the request
+	#[serde(default, deserialize_with = "ensure_not_empty")]
 	pub name: Option<String>,
 	/// List of request names which this request requires before it can run
 	#[serde(default)]
-	pub depends: Vec<String>,
+	pub requires: Vec<String>,
 	/// Specify the request command to use, i.e. "GET"
 	#[serde(default = "default_request_method")]
 	pub request_method: String,
@@ -50,6 +52,22 @@ pub struct RequestConfig {
 	/// A list of assertions to perform on the response
 	#[serde(default = "default_assertions")]
 	pub assertions: Vec<AssertionConfig>,
+}
+
+/// Ensures empty values or values with only whitespace are set as None
+pub(crate) fn ensure_not_empty<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let result: Result<Option<String>, _> = Option::deserialize(deserializer);
+
+	if let Ok(Some(value)) = result {
+		if !value.trim().is_empty() {
+			return Ok(Some(value));
+		}
+	}
+
+	Ok(None)
 }
 
 pub(crate) fn default_request_method() -> String {
@@ -315,57 +333,49 @@ where
 		let this = unsafe { self.get_unchecked_mut() };
 		let states = &mut this.states;
 
-		let error_set: HashSet<_> = states
-			.iter()
-			.filter_map(|(key, state)| match state {
-				State::Done(ref result) => match **result {
-					Err(_) => Some(key),
-					_ => None,
-				},
-				_ => None,
-			})
-			.cloned()
-			.collect();
-
-		// Start any requests which have no depends or have depends which have all completed
-		// successfully.
-		let success_set: HashSet<_> = states
-			.iter()
-			.filter_map(|(key, state)| match state {
-				State::Done(ref result) => match **result {
-					Ok(_) => Some(key),
-					_ => None,
-				},
-				_ => None,
-			})
-			.cloned()
-			.collect();
+		// Create sets of errored and successful requests to match against request dependencies
+		// when checking whether a request can be started.
+		// TODO Not super happy about all the cloning happening over here.
+		let mut error_set: HashSet<String> = HashSet::new();
+		let mut success_set: HashSet<String> = HashSet::new();
+		for (key, state) in states.iter() {
+			if let State::Done(ref result) = state {
+				match **result {
+					Ok(_) => success_set.insert(key.clone()),
+					Err(_) => error_set.insert(key.clone()),
+				};
+			}
+		}
 
 		for (_, state) in states.iter_mut() {
 			if let State::Wait(request_config) = state {
-				// TODO validate that the depends keys actually exist in states otherwise a request
+				// TODO validate that the requires keys actually exist in states otherwise a request
 				// could wait indefinitely.
 				//
 				// Get the intersection of the request dependencies and the requests which have
-				// completed successfully. If they intersection set matches the dependency set,
+				// completed successfully. If they intersection set matches the requires set,
 				// then this request can be started.
-				let depends_set: HashSet<_> = request_config.depends.clone().into_iter().collect();
+				let requires_set: HashSet<_> = request_config.requires.iter().cloned().collect();
+
 				let success_intersection: HashSet<_> =
-					success_set.intersection(&depends_set).collect();
-				let error_intersection: HashSet<_> = error_set.intersection(&depends_set).collect();
+					success_set.intersection(&requires_set).collect();
+				let error_intersection: HashSet<_> =
+					error_set.intersection(&requires_set).collect();
 
 				if !error_intersection.is_empty() {
-					// Update this requests state so that it can be polled.
+					// Update this requests state so that it is Done and skips polling.
 					*state = State::Done(Box::new(Err(Error::DependencyError(
 						request_config.clone(),
+						// Non-exhaustive list of dependencies which failed before attempting to
+						// start this request.
 						error_intersection
-							.iter()
-							.map(|k| (&**k).clone())
+							.into_iter()
+							.cloned()
 							.collect::<Vec<String>>()
 							.join(", "),
 					)
 					.into())));
-				} else if success_intersection.len() == depends_set.len() {
+				} else if success_intersection.len() == requires_set.len() {
 					// Update this requests state so that it can be polled.
 					*state = State::Future(Box::pin(run_request(
 						this.config.clone(),
@@ -443,14 +453,16 @@ where
 }
 
 ///
-pub async fn upcake<C: 'static>(
+pub async fn upcake<C: 'static, I, R>(
 	config: Config,
-	requests: Vec<RequestConfig>,
+	requests: I,
 	context: Option<C>,
-	reporter: &mut dyn Reporter,
+	reporter: &mut R,
 ) -> Result<()>
 where
+	I: Iterator<Item = RequestConfig>,
 	C: Serialize,
+	R: Reporter,
 {
 	let mut request_config_map = HashMap::new();
 

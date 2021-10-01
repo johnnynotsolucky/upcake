@@ -339,7 +339,7 @@ where
 		let mut error_set: HashSet<String> = HashSet::new();
 		let mut success_set: HashSet<String> = HashSet::new();
 		for (key, state) in states.iter() {
-			if let State::Done(ref result) = state {
+			if let State::Done(result) = state {
 				//    👇 result is a reference to a Box
 				match **result {
 					Ok(_) => success_set.insert(key.clone()),

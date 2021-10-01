@@ -340,6 +340,7 @@ where
 		let mut success_set: HashSet<String> = HashSet::new();
 		for (key, state) in states.iter() {
 			if let State::Done(ref result) = state {
+				//    👇 result is a reference to a Box
 				match **result {
 					Ok(_) => success_set.insert(key.clone()),
 					Err(_) => error_set.insert(key.clone()),
@@ -391,10 +392,14 @@ where
 		for (name, state) in states.iter_mut() {
 			match state {
 				State::Future(future) => {
-					match unsafe { Pin::new_unchecked(future) }.poll(context) {
+					// This future can be polled
+					match Pin::new(future).poll(context) {
+						// If it is Ready, mark it's state as Done
 						Poll::Ready(result) => {
 							let result = Box::new(result);
 
+							// If there is an Ok result from the request future, add that to the
+							// TemplateContext under the name of the request.
 							if let Ok((_, ref stat_result)) = *result {
 								let mut context = this.context.lock().unwrap();
 								context
@@ -405,19 +410,23 @@ where
 							*state = State::Done(result);
 						}
 						Poll::Pending => {
+							// If the request has started, but is still pending, mark the future
+							// as incomplete.
 							all_ready = false;
 							continue;
 						}
 					}
 				}
 				State::Wait(_) => {
+					// If the request is still waiting to start, mark the future as incomplete.
 					all_ready = false;
 					continue;
 				}
-				State::Done(_) => continue,
+				State::Done(_) => continue, // Ignore Done, there's no further work needed.
 			}
 		}
 
+		// When all the states are the Ready variant, the results can be mapped to a list
 		if all_ready {
 			// We don't need states anymore, shadow the variable and map into the result Vec.
 			let states = std::mem::take(states);
@@ -469,7 +478,6 @@ where
 	// Move requests into a map with the request names as keys, or if the name is not set, the
 	// string representation of the request's index in the iterator.
 	for (idx, request_config) in requests.into_iter().enumerate() {
-		// TODO probably make sure name is not something silly like "" or " "
 		let name = request_config
 			.name
 			.clone()

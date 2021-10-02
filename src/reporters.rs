@@ -33,7 +33,8 @@ impl Reporter for SimpleReporter {
 	fn step_result(&mut self, result: AssertionResult) {
 		match result {
 			AssertionResult::Skip(assertion, reason) => {
-				println!("  🟰 {} - {} ", assertion, reason);
+				println!("  🟰 {}", assertion);
+				println!("    skipped: {} ", reason);
 			}
 			AssertionResult::Success(assertion, _value) => {
 				println!("  ✔ {}", assertion);

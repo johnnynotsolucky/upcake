@@ -26,16 +26,39 @@ fn value_to_string(value: &YamlValue) -> String {
 
 /// Configuration for the assertion to applied against the response results
 #[derive(Deserialize, Debug, Clone)]
-pub struct RequestAssertionConfig<T: Assert + ?Sized> {
+pub struct RequestAssertionConfig<T>
+where
+	T: Assert + ?Sized,
+{
 	/// Whether this assertion should be skipped
 	#[serde(default)]
 	pub skip: Option<String>,
 	/// The [`jql`] path to the field being asserted
-	#[serde(default)]
-	pub path: String,
+	///
+	/// Defaults to `.` when not set during deserialization.
+	///
+	/// Ignored when set on inner assertions, for example [`Length::inner`].
+	#[serde(default = "default_path")]
+	pub path: Option<String>,
 	/// The assertion to apply
 	#[serde(flatten)]
 	pub assertion: T,
+}
+
+pub(crate) fn default_path() -> Option<String> {
+	Some(".".into())
+}
+
+impl<T> fmt::Display for RequestAssertionConfig<T>
+where
+	T: Assert + fmt::Display,
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.path {
+			Some(ref path) => write!(f, "{} {}", path, self.assertion),
+			None => write!(f, "{}", self.assertion),
+		}
+	}
 }
 
 /// Result of the assertion
@@ -71,27 +94,112 @@ pub enum AssertionResult {
 	),
 }
 
+///
+///
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum AssertionConfig {
+	/// ```yaml
+	/// - type: between
+	///   path: ."response_code"
+	///   min: 200
+	///   max: 399
+	///   inclusive: true
+	/// ```
 	#[serde(rename = "between")]
 	Between(RequestAssertionConfig<Between>),
+	/// ```yaml
+	/// - type: equal
+	///   path: ."response_code"
+	///   value: 200
+	/// ```
 	#[serde(rename = "equal")]
 	Equal(RequestAssertionConfig<Equal>),
+	/// ```yaml
+	/// - type: not-equal
+	///   path: ."response_code"
+	///   value: 204
+	/// ```
 	#[serde(rename = "not-equal")]
 	NotEqual(RequestAssertionConfig<NotEqual>),
+	/// ```yaml
+	/// - type: length
+	///   path: ."headers".[]
+	///   assertion:
+	///     - type: equal
+	///       value: 5
+	/// ```
 	#[serde(rename = "length")]
 	Length(RequestAssertionConfig<Length>),
+	/// # Assert mapping contains all key/value pairs
+	///
+	/// ```yaml
+	/// - type: contains
+	///   path: ."content".{}
+	///   value:
+	///     key: Value
+	///     another_property: Some other value
+	/// ```
+	///
+	/// # Assert array contains a value
+	///
+	/// ```yaml
+	/// - type: contains
+	///   path: ."content"."my_integer_array".[]
+	///   value: 10
+	/// ```
+	/// or
+	///
+	/// ```yaml
+	/// - type: contains
+	///   path: ."content"."my_object_array".[]
+	///   value:
+	///     id: item_10
+	///     value: Item Value
+	/// ```
+	///
+	/// # Assert substring appears in response value
+	///
+	/// ```yaml
+	/// - type: contains
+	///   path: ."content"."my_string"
+	///   value: "value"
+	/// ```
 	#[serde(rename = "contains")]
 	Contains(RequestAssertionConfig<Contains>),
+	/// ```yaml
+	/// - type: exists
+	///   path: ."content"."my_object".{}
+	///   value: id
+	/// ```
 	#[serde(rename = "exists")]
 	Exists(RequestAssertionConfig<Exists>),
+	/// ```yaml
+	/// - type: greater-than
+	///   path: ."response_code"
+	///   value: 200
+	/// ```
 	#[serde(rename = "greater-than")]
 	GreaterThan(RequestAssertionConfig<GreaterThan>),
+	/// ```yaml
+	/// - type: greater-than-equal
+	///   path: ."response_code"
+	///   value: 200
+	/// ```
 	#[serde(rename = "greater-than-equal")]
 	GreaterThanEqual(RequestAssertionConfig<GreaterThanEqual>),
+	/// ```yaml
+	/// - type: less-than
+	///   path: ."response_code"
+	///   value: 400
+	/// ```
 	#[serde(rename = "less-than")]
 	LessThan(RequestAssertionConfig<LessThan>),
+	/// ```yaml
+	/// - type: less-than-equal
+	///   path: ."timing"."starttransfer"
+	///   value: 100
+	/// ```
 	#[serde(rename = "less-than-equal")]
 	LessThanEqual(RequestAssertionConfig<LessThanEqual>),
 }
@@ -101,28 +209,33 @@ impl AssertionConfig {
 		let inner = self.inner();
 		if let Some(ref skip) = inner.skip {
 			Ok(AssertionResult::Skip(self.clone(), skip.clone()))
-		} else if let Ok(found_value) =
-			jql::walker(&serde_json::to_value(value)?, Some(&inner.path))
-		{
-			let result = serde_yaml::to_value(&found_value)?;
-			let assertion_result = inner.assertion.assert(&result);
+		} else {
+			let inner_path: Option<&str> = match &inner.path {
+				Some(path) => Some(path),
+				None => None,
+			};
 
-			if assertion_result {
-				Ok(AssertionResult::Success(
-					self.clone(),
-					serde_yaml::to_value(found_value)?,
-				))
+			if let Ok(found_value) = jql::walker(&serde_json::to_value(value)?, inner_path) {
+				let result = serde_yaml::to_value(&found_value)?;
+				let assertion_result = inner.assertion.assert(&result);
+
+				if assertion_result {
+					Ok(AssertionResult::Success(
+						self.clone(),
+						serde_yaml::to_value(found_value)?,
+					))
+				} else {
+					Ok(AssertionResult::Failure(
+						self.clone(),
+						serde_yaml::to_value(found_value)?,
+					))
+				}
 			} else {
-				Ok(AssertionResult::Failure(
-					self.clone(),
-					serde_yaml::to_value(found_value)?,
+				Ok(AssertionResult::FailureOther(
+					Some(self.clone()),
+					"Invalid path".into(),
 				))
 			}
-		} else {
-			Ok(AssertionResult::FailureOther(
-				Some(self.clone()),
-				"Invalid path".into(),
-			))
 		}
 	}
 
@@ -164,6 +277,8 @@ impl fmt::Display for AssertionConfig {
 }
 
 /// Assert that a value is within a range
+///
+/// See [`AssertionConfig::Between`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Between {
 	/// Start of range
@@ -201,14 +316,14 @@ impl Assert for Between {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<Between> {
+impl fmt::Display for Between {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
 			"between {} and {} ({})",
-			value_to_string(&self.assertion.min),
-			value_to_string(&self.assertion.max),
-			if self.assertion.inclusive {
+			value_to_string(&self.min),
+			value_to_string(&self.max),
+			if self.inclusive {
 				"inclusive"
 			} else {
 				"exclusive"
@@ -218,6 +333,8 @@ impl fmt::Display for RequestAssertionConfig<Between> {
 }
 
 /// Assert that a value equals the given value
+///
+/// See [`AssertionConfig::Equal`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Equal {
 	/// Value to assert against
@@ -238,13 +355,15 @@ impl Assert for Equal {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<Equal> {
+impl fmt::Display for Equal {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "equals {}", value_to_string(&self.assertion.value))
+		write!(f, "equals {}", value_to_string(&self.value))
 	}
 }
 
 /// Assert that a value is not equal to the given value
+///
+/// See [`AssertionConfig::NotEqual`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct NotEqual {
 	/// Value to assert against
@@ -265,13 +384,15 @@ impl Assert for NotEqual {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<NotEqual> {
+impl fmt::Display for NotEqual {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "not equals {}", value_to_string(&self.assertion.value))
+		write!(f, "not equals {}", value_to_string(&self.value))
 	}
 }
 
 /// Assert that a value is greater than the given value
+///
+/// See [`AssertionConfig::GreaterThan`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThan {
 	/// Value to assert against
@@ -284,13 +405,15 @@ impl Assert for GreaterThan {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<GreaterThan> {
+impl fmt::Display for GreaterThan {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "greater than {}", value_to_string(&self.assertion.value),)
+		write!(f, "greater than {}", value_to_string(&self.value),)
 	}
 }
 
 /// Assert that a value is greater or equal to the given value
+///
+/// See [`AssertionConfig::GreaterThanEqual`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThanEqual {
 	/// Value to assert against
@@ -303,17 +426,19 @@ impl Assert for GreaterThanEqual {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<GreaterThanEqual> {
+impl fmt::Display for GreaterThanEqual {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
 			"greater than or equal to {}",
-			value_to_string(&self.assertion.value),
+			value_to_string(&self.value),
 		)
 	}
 }
 
 /// Assert that a value is less than the given value
+///
+/// See [`AssertionConfig::LessThan`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThan {
 	pub value: YamlValue,
@@ -325,13 +450,15 @@ impl Assert for LessThan {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<LessThan> {
+impl fmt::Display for LessThan {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "less than {}", value_to_string(&self.assertion.value),)
+		write!(f, "less than {}", value_to_string(&self.value),)
 	}
 }
 
 /// Assert that a value is less than or equal to the given value
+///
+/// See [`AssertionConfig::LessThanEqual`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThanEqual {
 	pub value: YamlValue,
@@ -343,17 +470,15 @@ impl Assert for LessThanEqual {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<LessThanEqual> {
+impl fmt::Display for LessThanEqual {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(
-			f,
-			"less than or equal {}",
-			value_to_string(&self.assertion.value),
-		)
+		write!(f, "less than or equal {}", value_to_string(&self.value),)
 	}
 }
 
 /// Assert that the length of a value passes the given assertion
+///
+/// See [`AssertionConfig::Length`] for examples.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Length {
 	#[serde(rename = "assertion")]
@@ -383,16 +508,22 @@ impl Assert for Length {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<Length> {
+impl fmt::Display for Length {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "length ")?;
-		self.assertion.inner.fmt(f)
+		write!(f, "length {}", self.inner)
 	}
 }
 
-/// Assert that a value contains the given value.
+/// Assert that a response value contains the given value.
 ///
-/// Only works for string and iterator types.
+/// - For strings, it asserts that the substring is present in the value;
+/// - For arrays when the required value is _not_ an array, it asserts that the value is present in
+/// the array;
+/// - For arrays when the required value _is_ an array, it asserts that _all_ elements of the input
+/// are present in the response array;
+/// - For mappings (object types), asserts that the input map is present in the response map.
+///
+/// See [`AssertionConfig::Contains`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Contains {
 	value: YamlValue,
@@ -413,22 +544,43 @@ impl Assert for Contains {
 				.value
 				.as_str()
 				.map_or(false, |substring| value.contains(substring)),
-			YamlValue::Sequence(value) => {
-				let search_value = self.value.clone();
-				value.iter().any(|item| *item == search_value)
+			YamlValue::Sequence(value) => value.iter().any(|item| item == &self.value),
+			YamlValue::Mapping(value) => {
+				let mut all_found = true;
+				match self.value {
+					YamlValue::Mapping(ref search_value) => {
+						// If the search value is a Mapping, ensure that all key/value pairs it holds
+						// are found in the response value.
+						for search_value in search_value.iter() {
+							match value.get(search_value.0) {
+								Some(value) => {
+									if value != search_value.1 {
+										all_found = false;
+									}
+								}
+								None => all_found = false,
+							}
+						}
+					}
+					_ => all_found = false,
+				}
+
+				all_found
 			}
 			_ => false,
 		}
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<Contains> {
+impl fmt::Display for Contains {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "contains {}", value_to_string(&self.assertion.value))
+		write!(f, "contains {}", value_to_string(&self.value))
 	}
 }
 
-/// Assert that the given value exists as a key in the value
+/// Assert that the given value exists as a key in the response value
+///
+/// See [`AssertionConfig::Exists`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Exists {
 	value: YamlValue,
@@ -451,9 +603,9 @@ impl Assert for Exists {
 	}
 }
 
-impl fmt::Display for RequestAssertionConfig<Exists> {
+impl fmt::Display for Exists {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "exists {}", value_to_string(&self.assertion.value))
+		write!(f, "exists {}", value_to_string(&self.value))
 	}
 }
 
@@ -1002,6 +1154,16 @@ mod tests {
 				as_value(vec![0.0, 1.0, 2.0]),
 				"[0.0, 1.0, 2.0] contains 2.0",
 			),
+			(
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2")?,
+				"{\"value_a\": 1} is in {\"value_a\": 1, \"value_b\": 2}",
+			),
+			(
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_c: 3")?,
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
+				"{\"value_a\": 1, \"value_c\": 3} is in {\"value_a\": 1, \"value_b\": 2, \"value_c\": 3}",
+			),
 		];
 
 		for (expected, value, msg) in test_cases {
@@ -1047,6 +1209,16 @@ mod tests {
 				as_value(2),
 				as_value(vec![0.0, 1.0, 2.0]),
 				"[0.0, 1.0, 2.0] does not contain 2",
+			),
+			(
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 2")?,
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2")?,
+				"{\"value_a\": 2} is not in {\"value_a\": 1, \"value_b\": 2}",
+			),
+			(
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_c: 4")?,
+				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
+				"{\"value_a\": 1, \"value_c\": 4} is not in {\"value_a\": 1, \"value_b\": 2, \"value_c\": 3}",
 			),
 		];
 
@@ -1338,7 +1510,7 @@ mod tests {
 			let assertion = Length {
 				inner: Box::new(AssertionConfig::Equal(RequestAssertionConfig {
 					skip: None,
-					path: "".into(),
+					path: None,
 					assertion: Equal::new(value),
 				})),
 			};
@@ -1352,7 +1524,7 @@ mod tests {
 	fn assert_skip_assertion() -> Result<()> {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: Some("Skip".into()),
-			path: "".into(),
+			path: None,
 			assertion: Equal::new(None as Option<()>),
 		});
 
@@ -1373,7 +1545,7 @@ mod tests {
 	fn assert_failure_invalid_path() -> Result<()> {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
-			path: ".\"invalid\"".into(),
+			path: Some(".\"invalid\"".into()),
 			assertion: Equal::new(None as Option<()>),
 		});
 
@@ -1394,7 +1566,7 @@ mod tests {
 	fn assert_failure_failed_assert() -> Result<()> {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
-			path: ".".into(),
+			path: Some(".".into()),
 			assertion: Equal::new(true),
 		});
 
@@ -1416,7 +1588,7 @@ mod tests {
 	fn assert_success_assert() -> Result<()> {
 		let assertion_config = AssertionConfig::Equal(RequestAssertionConfig {
 			skip: None,
-			path: ".".into(),
+			path: Some(".".into()),
 			assertion: Equal::new(true),
 		});
 

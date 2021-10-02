@@ -77,7 +77,7 @@ pub(crate) fn default_request_method() -> String {
 pub(crate) fn default_assertions() -> Vec<AssertionConfig> {
 	vec![AssertionConfig::Equal(RequestAssertionConfig {
 		skip: None,
-		path: ".\"response_code\"".into(),
+		path: Some(".\"response_code\"".into()),
 		assertion: Equal::new(200),
 	})]
 }

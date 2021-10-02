@@ -97,6 +97,7 @@ fn main() -> Result<()> {
 		}
 	}
 
+	// Add any extra variables set through the CLI
 	if let Some(extra_vars) = opt.extra_vars {
 		for var in extra_vars.into_iter() {
 			if let Some(path) = var.strip_prefix('@') {

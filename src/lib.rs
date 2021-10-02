@@ -356,6 +356,28 @@ where
 	}
 }
 
+enum RequirementState {
+	Wait,
+	Success,
+	Error,
+}
+
+impl<F> From<&State<F>> for RequirementState
+where
+	F: Future<Output = RequestResult>,
+{
+	fn from(state: &State<F>) -> Self {
+		match state {
+			// result is a reference to a Box
+			State::Done(result) => match **result {
+				Ok(_) => Self::Success,
+				Err(_) => Self::Error,
+			},
+			_ => Self::Wait,
+		}
+	}
+}
+
 /// Iterate over request states and check whether each waiting state should be marked as running.
 fn mark_ready_states<C>(requests_future: &mut RequestsFuture<C>)
 where
@@ -365,54 +387,87 @@ where
 	// Create sets of errored and successful requests to match against request dependencies
 	// when checking whether a request can be started.
 	//
-	// TODO Not super happy about all the cloning happening over here.
-	let mut error_set: HashSet<String> = HashSet::new();
-	let mut success_set: HashSet<String> = HashSet::new();
-	for (key, state) in states.iter() {
-		if let State::Done(result) = state {
-			//    👇 result is a reference to a Box
-			match **result {
-				Ok(_) => success_set.insert(key.clone()),
-				Err(_) => error_set.insert(key.clone()),
-			};
-		}
+	// Create a hashmap of all requirement states so that waiting requests can be validated.
+	// The map uses owned values for the keys because when the code that references this is inside
+	// an exclusive reference. So if this data was references to data in `state`, it would not
+	// compile.
+	let all_map: HashMap<String, RequirementState> = states
+		.iter()
+		.map(|(key, state)| (key.clone(), RequirementState::from(state)))
+		.collect();
+
+	let mut error_set: HashSet<&str> = HashSet::new();
+	let mut success_set: HashSet<&str> = HashSet::new();
+
+	for (key, state) in all_map.iter() {
+		match state {
+			RequirementState::Success => {
+				success_set.insert(key);
+			}
+			RequirementState::Error => {
+				error_set.insert(key);
+			}
+			_ => {}
+		};
 	}
 
-	for (_, state) in states.iter_mut() {
+	for (key, state) in states.iter_mut() {
 		if let State::Wait(request_config) = state {
-			// TODO validate that the requires keys actually exist in states otherwise a request
-			// could wait indefinitely.
-			//
-			// Get the intersection of the request dependencies and the requests which have
-			// completed successfully. If they intersection set matches the requires set,
-			// then this request can be started.
-			let requires_set: HashSet<_> = request_config.requires.iter().cloned().collect();
+			let requirements_validated = if !request_config.requires.is_empty() {
+				// If the request has requirements, ensure that they all exist otherwise it will
+				// never leave the Wait state.
+				let exists = all_map
+					.keys()
+					.all(|key| request_config.requires.iter().any(|r| key == r));
 
-			let success_intersection: HashSet<_> =
-				success_set.intersection(&requires_set).collect();
-			let error_intersection: HashSet<_> = error_set.intersection(&requires_set).collect();
+				// If the request requires itself, it will sit in Wait indefinitely.
+				let requires_self = request_config.requires.iter().any(|r| r == key);
 
-			if !error_intersection.is_empty() {
-				// Update this requests state so that it is Done and skips polling.
+				exists && !requires_self
+			} else {
+				true
+			};
+
+			if requirements_validated {
+				// Get the intersection of the request dependencies and the requests which have
+				// completed successfully. If they intersection set matches the requires set,
+				// then this request can be started.
+				let requires_set: HashSet<_> =
+					request_config.requires.iter().map(|s| s.as_str()).collect();
+
+				let success_intersection: HashSet<_> =
+					success_set.intersection(&requires_set).collect();
+				let error_intersection: HashSet<_> =
+					error_set.intersection(&requires_set).collect();
+
+				if !error_intersection.is_empty() {
+					// Update this requests state so that it is Done and skips polling.
+					*state = State::Done(Box::new(Err(Error::DependencyError(
+						request_config.clone(),
+						// Non-exhaustive list of dependencies which failed before attempting to
+						// start this request.
+						error_intersection
+							.into_iter()
+							.cloned()
+							.collect::<Vec<&str>>()
+							.join(", "),
+					)
+					.into())));
+				} else if success_intersection.len() == requires_set.len() {
+					// This request is ready to start, update this requests state so that it can be
+					// polled.
+					*state = State::Future(Box::pin(run_request(
+						requests_future.config.clone(),
+						request_config.clone(),
+						requests_future.context.clone(),
+					)));
+				}
+			} else {
 				*state = State::Done(Box::new(Err(Error::DependencyError(
 					request_config.clone(),
-					// Non-exhaustive list of dependencies which failed before attempting to
-					// start this request.
-					error_intersection
-						.into_iter()
-						.cloned()
-						.collect::<Vec<String>>()
-						.join(", "),
+					"Invalid requirements".into(),
 				)
 				.into())));
-			} else if success_intersection.len() == requires_set.len() {
-				// This request is ready to start, update this requests state so that it can be
-				// polled.
-				*state = State::Future(Box::pin(run_request(
-					requests_future.config.clone(),
-					request_config.clone(),
-					requests_future.context.clone(),
-				)));
 			}
 		}
 	}

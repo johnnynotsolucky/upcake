@@ -23,6 +23,9 @@ use thiserror::Error;
 use assertions::{AssertionConfig, AssertionResult, Equal, RequestAssertionConfig};
 use reporters::Reporter;
 
+/// Re-export [`serde_yaml::Value`].
+pub use serde_yaml::Value;
+
 /// Configuration for individual requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct RequestConfig {

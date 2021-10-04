@@ -1,26 +1,27 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_yaml::Value as YamlValue;
 use std::fmt;
 
+use crate::Value;
+
 pub trait Assert {
-	fn assert(&self, result: &YamlValue) -> bool;
+	fn assert(&self, result: &Value) -> bool;
 }
 
-fn value_to_string(value: &YamlValue) -> String {
+fn value_to_string(value: &Value) -> String {
 	match value {
-		YamlValue::Null => "null".into(),
-		YamlValue::Bool(inner) => format!("{}", inner),
-		YamlValue::Number(inner) => {
+		Value::Null => "null".into(),
+		Value::Bool(inner) => format!("{}", inner),
+		Value::Number(inner) => {
 			if inner.is_i64() {
 				format!("{}", inner.as_i64().unwrap())
 			} else {
 				format!("{}", inner.as_f64().unwrap())
 			}
 		}
-		YamlValue::String(inner) => inner.into(),
-		YamlValue::Sequence(inner) => serde_json::to_string(inner).unwrap(),
-		YamlValue::Mapping(inner) => serde_json::to_string(inner).unwrap(),
+		Value::String(inner) => inner.into(),
+		Value::Sequence(inner) => serde_json::to_string(inner).unwrap(),
+		Value::Mapping(inner) => serde_json::to_string(inner).unwrap(),
 	}
 }
 
@@ -69,14 +70,14 @@ pub enum AssertionResult {
 		/// Assertion configuration used
 		AssertionConfig,
 		/// Found value
-		YamlValue,
+		Value,
 	),
 	/// Assertion failed
 	Failure(
 		/// Assertion configuration used
 		AssertionConfig,
 		/// Found value
-		YamlValue,
+		Value,
 	),
 	/// Failure not related to the assertion
 	FailureOther(
@@ -205,7 +206,7 @@ pub enum AssertionConfig {
 }
 
 impl AssertionConfig {
-	pub fn assert(&self, value: &YamlValue) -> Result<AssertionResult> {
+	pub fn assert(&self, value: &Value) -> Result<AssertionResult> {
 		let inner = self.inner();
 		if let Some(ref skip) = inner.skip {
 			Ok(AssertionResult::Skip(self.clone(), skip.clone()))
@@ -254,7 +255,7 @@ impl AssertionConfig {
 		}
 	}
 
-	fn inner_assert(&self, value: &YamlValue) -> bool {
+	fn inner_assert(&self, value: &Value) -> bool {
 		self.inner().assertion.assert(value)
 	}
 }
@@ -282,9 +283,9 @@ impl fmt::Display for AssertionConfig {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Between {
 	/// Start of range
-	pub min: YamlValue,
+	pub min: Value,
 	/// End of range
-	pub max: YamlValue,
+	pub max: Value,
 	/// Whether to include [`Between::min`] and [`Between::max`]
 	#[serde(default)]
 	pub inclusive: bool,
@@ -307,7 +308,7 @@ impl Between {
 }
 
 impl Assert for Between {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		if self.inclusive {
 			*value >= self.min && *value <= self.max
 		} else {
@@ -338,7 +339,7 @@ impl fmt::Display for Between {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Equal {
 	/// Value to assert against
-	value: YamlValue,
+	value: Value,
 }
 
 impl Equal {
@@ -350,7 +351,7 @@ impl Equal {
 }
 
 impl Assert for Equal {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value == self.value
 	}
 }
@@ -367,7 +368,7 @@ impl fmt::Display for Equal {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct NotEqual {
 	/// Value to assert against
-	value: YamlValue,
+	value: Value,
 }
 
 impl NotEqual {
@@ -379,7 +380,7 @@ impl NotEqual {
 }
 
 impl Assert for NotEqual {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value != self.value
 	}
 }
@@ -396,11 +397,11 @@ impl fmt::Display for NotEqual {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThan {
 	/// Value to assert against
-	pub value: YamlValue,
+	pub value: Value,
 }
 
 impl Assert for GreaterThan {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value > self.value
 	}
 }
@@ -417,11 +418,11 @@ impl fmt::Display for GreaterThan {
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct GreaterThanEqual {
 	/// Value to assert against
-	pub value: YamlValue,
+	pub value: Value,
 }
 
 impl Assert for GreaterThanEqual {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value >= self.value
 	}
 }
@@ -441,11 +442,11 @@ impl fmt::Display for GreaterThanEqual {
 /// See [`AssertionConfig::LessThan`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThan {
-	pub value: YamlValue,
+	pub value: Value,
 }
 
 impl Assert for LessThan {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value < self.value
 	}
 }
@@ -461,11 +462,11 @@ impl fmt::Display for LessThan {
 /// See [`AssertionConfig::LessThanEqual`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct LessThanEqual {
-	pub value: YamlValue,
+	pub value: Value,
 }
 
 impl Assert for LessThanEqual {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		*value <= self.value
 	}
 }
@@ -494,16 +495,16 @@ impl Length {
 }
 
 impl Assert for Length {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		let length = match value {
-			YamlValue::String(value) => Some(value.len()),
-			YamlValue::Mapping(value) => Some(value.len()),
-			YamlValue::Sequence(value) => Some(value.len()),
+			Value::String(value) => Some(value.len()),
+			Value::Mapping(value) => Some(value.len()),
+			Value::Sequence(value) => Some(value.len()),
 			_ => None,
 		};
 
 		length.map_or(false, |length| {
-			self.inner.inner_assert(&YamlValue::from(length))
+			self.inner.inner_assert(&Value::from(length))
 		})
 	}
 }
@@ -523,7 +524,7 @@ impl fmt::Display for Length {
 /// See [`AssertionConfig::Contains`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Contains {
-	value: YamlValue,
+	value: Value,
 }
 
 impl Contains {
@@ -535,17 +536,17 @@ impl Contains {
 }
 
 impl Assert for Contains {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		match value {
-			YamlValue::String(value) => self
+			Value::String(value) => self
 				.value
 				.as_str()
 				.map_or(false, |substring| value.contains(substring)),
-			YamlValue::Sequence(value) => value.iter().any(|item| item == &self.value),
-			YamlValue::Mapping(value) => {
+			Value::Sequence(value) => value.iter().any(|item| item == &self.value),
+			Value::Mapping(value) => {
 				let mut all_found = true;
 				match self.value {
-					YamlValue::Mapping(ref search_value) => {
+					Value::Mapping(ref search_value) => {
 						// If the search value is a Mapping, ensure that all key/value pairs it holds
 						// are found in the response value.
 						for search_value in search_value.iter() {
@@ -580,7 +581,7 @@ impl fmt::Display for Contains {
 /// See [`AssertionConfig::Exists`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Exists {
-	value: YamlValue,
+	value: Value,
 }
 
 impl Exists {
@@ -592,9 +593,9 @@ impl Exists {
 }
 
 impl Assert for Exists {
-	fn assert(&self, value: &YamlValue) -> bool {
+	fn assert(&self, value: &Value) -> bool {
 		match value {
-			YamlValue::Mapping(value) => value.contains_key(&self.value),
+			Value::Mapping(value) => value.contains_key(&self.value),
 			_ => false,
 		}
 	}
@@ -611,7 +612,7 @@ mod tests {
 	use crate::assertions::*;
 	use anyhow::Result;
 	use serde::Serialize;
-	use serde_yaml::Value as YamlValue;
+	use serde_yaml::Value;
 
 	#[derive(Serialize)]
 	struct Mapping {
@@ -619,7 +620,7 @@ mod tests {
 		value_b: String,
 	}
 
-	fn as_value<T: Serialize>(v: T) -> YamlValue {
+	fn as_value<T: Serialize>(v: T) -> Value {
 		serde_yaml::to_value(v).unwrap()
 	}
 
@@ -1152,13 +1153,13 @@ mod tests {
 				"[0.0, 1.0, 2.0] contains 2.0",
 			),
 			(
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_b: 2")?,
 				"{\"value_a\": 1} is in {\"value_a\": 1, \"value_b\": 2}",
 			),
 			(
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_c: 3")?,
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_c: 3")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
 				"{\"value_a\": 1, \"value_c\": 3} is in {\"value_a\": 1, \"value_b\": 2, \"value_c\": 3}",
 			),
 		];
@@ -1208,13 +1209,13 @@ mod tests {
 				"[0.0, 1.0, 2.0] does not contain 2",
 			),
 			(
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 2")?,
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 2")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_b: 2")?,
 				"{\"value_a\": 2} is not in {\"value_a\": 1, \"value_b\": 2}",
 			),
 			(
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_c: 4")?,
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_c: 4")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1\nvalue_b: 2\nvalue_c: 3")?,
 				"{\"value_a\": 1, \"value_c\": 4} is not in {\"value_a\": 1, \"value_b\": 2, \"value_c\": 3}",
 			),
 		];
@@ -1234,14 +1235,12 @@ mod tests {
 		let test_cases = vec![
 			(
 				as_value("value_a"),
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1")?,
 				"\"value_a\" exists in {\"value_a\": 1}",
 			),
 			(
 				as_value("value_a"),
-				serde_yaml::from_str::<YamlValue>(
-					"---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"",
-				)?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"")?,
 				"\"value_a\" exists in {\"value_a\": \"value_a\", \"value_b\": \"value_b\"}",
 			),
 		];
@@ -1261,14 +1260,12 @@ mod tests {
 		let test_cases = vec![
 			(
 				as_value("value_c"),
-				serde_yaml::from_str::<YamlValue>("---\nvalue_a: 1")?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: 1")?,
 				"\"value_a\" exists in {\"value_a\": 1}",
 			),
 			(
 				as_value("value_d"),
-				serde_yaml::from_str::<YamlValue>(
-					"---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"",
-				)?,
+				serde_yaml::from_str::<Value>("---\nvalue_a: \"value_a\"\nvalue_b: \"value_b\"")?,
 				"\"value_a\" exists in {\"value_a\": \"value_a\", \"value_b\": \"value_b\"}",
 			),
 			(

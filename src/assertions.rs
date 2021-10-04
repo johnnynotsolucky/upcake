@@ -517,10 +517,7 @@ impl fmt::Display for Length {
 /// Assert that a response value contains the given value.
 ///
 /// - For strings, it asserts that the substring is present in the value;
-/// - For arrays when the required value is _not_ an array, it asserts that the value is present in
-/// the array;
-/// - For arrays when the required value _is_ an array, it asserts that _all_ elements of the input
-/// are present in the response array;
+/// - For arrays, it asserts that the value is present in the array;
 /// - For mappings (object types), asserts that the input map is present in the response map.
 ///
 /// See [`AssertionConfig::Contains`] for examples.

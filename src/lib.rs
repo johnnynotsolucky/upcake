@@ -362,6 +362,37 @@ where
 	}
 }
 
+impl<C> Future for RequestsFuture<C>
+where
+	C: Serialize + 'static,
+{
+	type Output = Result<Vec<RequestResult>>;
+
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		let mut this = unsafe { self.get_unchecked_mut() };
+
+		// Mark states which are ready to be polled.
+		mark_ready_states(&mut this);
+
+		// When all the states are the Ready variant, the results can be mapped to a list
+		if poll_states(&mut this, context) {
+			// We don't need states anymore, shadow the variable and map into the result Vec.
+			let states = std::mem::take(&mut this.states);
+			let results = states
+				.into_values()
+				.map(|state| match state {
+					State::Done(result) => *result,
+					_ => unreachable!(),
+				})
+				.collect();
+
+			Poll::Ready(Ok(results))
+		} else {
+			Poll::Pending
+		}
+	}
+}
+
 enum RequirementState {
 	Wait,
 	Success,
@@ -538,37 +569,6 @@ where
 	}
 
 	all_ready
-}
-
-impl<C> Future for RequestsFuture<C>
-where
-	C: Serialize + 'static,
-{
-	type Output = Result<Vec<RequestResult>>;
-
-	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-		let mut this = unsafe { self.get_unchecked_mut() };
-
-		// Mark states which are ready to be polled.
-		mark_ready_states(&mut this);
-
-		// When all the states are the Ready variant, the results can be mapped to a list
-		if poll_states(&mut this, context) {
-			// We don't need states anymore, shadow the variable and map into the result Vec.
-			let states = std::mem::take(&mut this.states);
-			let results = states
-				.into_values()
-				.map(|state| match state {
-					State::Done(result) => *result,
-					_ => unreachable!(),
-				})
-				.collect();
-
-			Poll::Ready(Ok(results))
-		} else {
-			Poll::Pending
-		}
-	}
 }
 
 /// Context applied to request data such as headers, urls, content body.

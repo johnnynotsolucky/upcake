@@ -313,6 +313,12 @@ where
 	Done(Box<RequestResult>),
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+enum StateKey {
+	Name(String),
+	Idx(usize),
+}
+
 type RequestResult = Result<(Arc<RequestConfig>, Arc<StatResult>)>;
 type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
@@ -322,7 +328,7 @@ where
 {
 	config: Arc<Config>,
 	context: Arc<Mutex<TemplateContext<C>>>,
-	states: HashMap<String, RequestState>,
+	states: HashMap<StateKey, RequestState>,
 }
 
 impl<C> RequestsFuture<C>
@@ -336,11 +342,11 @@ where
 		// Move requests into a map with the request names as keys, or if the name is not set, the
 		// string representation of the request's index in the iterator.
 		for (idx, request_config) in requests.into_iter().enumerate() {
-			let name = request_config
-				.name
-				.clone()
-				.unwrap_or_else(|| format!("{}", idx));
-			request_config_map.insert(name, State::Wait(Arc::new(request_config)));
+			let state_key = match request_config.name {
+				Some(ref key) => StateKey::Name(key.clone()),
+				None => StateKey::Idx(idx),
+			};
+			request_config_map.insert(state_key, State::Wait(Arc::new(request_config)));
 		}
 		Self {
 			// Set up the template context to include the optional user context, environment variables
@@ -391,9 +397,14 @@ where
 	// The map uses owned values for the keys because when the code that references this is inside
 	// an exclusive reference. So if this data was references to data in `state`, it would not
 	// compile.
+	//
+	// Only named requests are included.
 	let all_map: HashMap<String, RequirementState> = states
 		.iter()
-		.map(|(key, state)| (key.clone(), RequirementState::from(state)))
+		.filter_map(|(ref state_key, state)| match state_key {
+			StateKey::Name(key) => Some((key.clone(), RequirementState::from(state))),
+			_ => None,
+		})
 		.collect();
 
 	let mut error_set: HashSet<&str> = HashSet::new();
@@ -411,7 +422,7 @@ where
 		};
 	}
 
-	for (key, state) in states.iter_mut() {
+	for (state_key, state) in states.iter_mut() {
 		if let State::Wait(request_config) = state {
 			let requirements_validated = if !request_config.requires.is_empty() {
 				// If the request has requirements, ensure that they all exist otherwise it will
@@ -421,7 +432,10 @@ where
 					.all(|key| request_config.requires.iter().any(|r| key == r));
 
 				// If the request requires itself, it will sit in Wait indefinitely.
-				let requires_self = request_config.requires.iter().any(|r| r == key);
+				let requires_self = request_config.requires.iter().any(|r| match state_key {
+					StateKey::Name(ref key) => r == key,
+					_ => false,
+				});
 
 				exists && !requires_self
 			} else {
@@ -483,7 +497,7 @@ where
 	let states = &mut requests_future.states;
 	let mut all_ready = true;
 
-	for (name, state) in states.iter_mut() {
+	for (state_key, state) in states.iter_mut() {
 		match state {
 			State::Future(future) => {
 				// This future can be polled
@@ -495,10 +509,13 @@ where
 						// If there is an Ok result from the request future, add that to the
 						// TemplateContext under the name of the request.
 						if let Ok((_, ref stat_result)) = *result {
-							let mut context = requests_future.context.lock().unwrap();
-							context
-								.requests
-								.insert(name.clone(), ResponseData::from(stat_result.clone()));
+							// Only named requests get added to the context
+							if let StateKey::Name(name) = state_key {
+								let mut context = requests_future.context.lock().unwrap();
+								context
+									.requests
+									.insert(name.clone(), ResponseData::from(stat_result.clone()));
+							}
 						}
 
 						*state = State::Done(result);

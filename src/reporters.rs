@@ -20,7 +20,7 @@ pub struct NoopReporter;
 
 impl Reporter for NoopReporter {
 	fn succeeded(&self) -> bool {
-	    true
+		true
 	}
 }
 
@@ -31,9 +31,7 @@ pub struct SimpleReporter {
 
 impl SimpleReporter {
 	pub fn new() -> Self {
-		Self {
-			failed: false,
-		}
+		Self { failed: false }
 	}
 }
 
@@ -86,7 +84,7 @@ impl Reporter for SimpleReporter {
 	}
 
 	fn succeeded(&self) -> bool {
-	    !self.failed
+		!self.failed
 	}
 }
 
@@ -201,6 +199,6 @@ impl Reporter for TapReporter {
 	}
 
 	fn succeeded(&self) -> bool {
-	    !self.bailed && !self.failed
+		!self.bailed && !self.failed
 	}
 }

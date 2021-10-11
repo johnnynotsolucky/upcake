@@ -296,3 +296,29 @@ Assert that a value is less than or equal to the given value
   path: ."timing"."starttransfer"
   value: 100
 ```
+
+## Examples
+
+Examples are in [examples](examples/).
+
+They are configured to run against a local [httpbin](https://httpbin.org/) server.
+
+### httpbin Server
+
+### Start with docker
+
+```bash
+docker run -p 8888:80 kennethreitz/httpbin
+```
+
+### Start with docker-compose
+
+```bash
+docker-compose --file examples/docker-compose.yaml up -d
+```
+
+### Run the examples
+
+```bash
+upcake --config-file examples/basic.yaml
+```

@@ -1,0 +1,4 @@
+---
+# Run a single request using the default request method and assertion.
+requests:
+  - url: "http://0.0.0.0:8888/get"

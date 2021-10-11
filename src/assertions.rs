@@ -519,7 +519,7 @@ impl fmt::Display for Length {
 ///
 /// - For strings, it asserts that the substring is present in the value;
 /// - For arrays, it asserts that the value is present in the array;
-/// - For mappings (object types), asserts that the input map is present in the response map.
+/// - For mappings (dictionary/object types), asserts that the input map is present in the response map.
 ///
 /// See [`AssertionConfig::Contains`] for examples.
 #[derive(Deserialize, Default, Debug, Clone)]

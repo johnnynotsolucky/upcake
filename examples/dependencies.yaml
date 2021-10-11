@@ -1,0 +1,59 @@
+extra_vars:
+  request_a_var: A Var
+requests:
+  - url: "http://localhost:8888/get?request_var={{user.request_a_var}}"
+    name: "Request A"
+
+  - url: "http://localhost:8888/json"
+    name: "Request B"
+    request_method: "GET"
+    assertions:
+      - type: equal
+        path: ."response_code"
+        value: 200
+
+      - type: exists
+        path: ."content"."slideshow".{}
+        value: slides
+
+      - type: length
+        path: ."content"."slideshow"."slides".[]
+        assertion:
+          type: equal
+          value: 2
+
+  - request_method: "POST"
+    name: "  "
+    requires: ["Request A", "Request B"]
+    url: "http://localhost:8888/post"
+    headers:
+      "Content-Type": "application/json"
+      "Authorization": "Bearer {{env.AUTH_TOKEN}}"
+    data: "@data.hbs"
+    assertions:
+      - type: equal
+        path: ."content"."data"
+        value: "{\n  \"request_a\": \"A Var\",\n  \"slide\": \"Wake up to WonderWidgets!\",\n}\n"
+
+      - type: between
+        path: ."response_code"
+        min: 200
+        max: 399
+        inclusive: true
+
+      - type: less-than
+        path: ."timing"."dns_resolution"
+        skip: "Some valid reason"
+        value: 100
+
+      - type: length
+        path: ."headers".[]
+        assertion:
+          type: equal
+          value: 7
+
+      - type: contains
+        path: ."headers".[]
+        value:
+          name: Content-Type
+          value: application/json

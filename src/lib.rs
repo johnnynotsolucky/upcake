@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs;
 use std::future::Future;
 use std::pin::Pin;
 use std::str;
@@ -19,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use thiserror::Error;
+use url::Url;
 
 use assertions::{AssertionConfig, AssertionResult, Equal, RequestAssertionConfig};
 use reporters::Reporter;
@@ -27,16 +27,15 @@ use reporters::Reporter;
 pub use serde_yaml::Value;
 
 /// Configuration for individual requests
-#[derive(Deserialize, Default, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct RequestConfig {
 	/// Name of the request
-	#[serde(default, deserialize_with = "ensure_not_empty")]
+	#[serde(deserialize_with = "ensure_not_empty")]
 	pub name: Option<String>,
 	/// List of request names which this request requires before it can run
-	#[serde(default)]
 	pub requires: Vec<String>,
 	/// Specify the request command to use, i.e. "GET"
-	#[serde(default = "default_request_method")]
 	pub request_method: String,
 	/// Data to pass with the request
 	///
@@ -53,8 +52,25 @@ pub struct RequestConfig {
 	/// The url string is rendered with [`mod@handlebars`].
 	pub url: String,
 	/// A list of assertions to perform on the response
-	#[serde(default = "default_assertions")]
 	pub assertions: Vec<AssertionConfig>,
+}
+
+impl Default for RequestConfig {
+	fn default() -> Self {
+		Self {
+			name: Default::default(),
+			requires: Default::default(),
+			request_method: "GET".into(),
+			data: Default::default(),
+			headers: Default::default(),
+			url: Default::default(),
+			assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
+				skip: None,
+				path: Some(".\"response_code\"".into()),
+				assertion: Equal::new(200),
+			})],
+		}
+	}
 }
 
 /// Ensures empty values or values with only whitespace are set as None
@@ -71,18 +87,6 @@ where
 	}
 
 	Ok(None)
-}
-
-pub(crate) fn default_request_method() -> String {
-	"GET".into()
-}
-
-pub(crate) fn default_assertions() -> Vec<AssertionConfig> {
-	vec![AssertionConfig::Equal(RequestAssertionConfig {
-		skip: None,
-		path: Some(".\"response_code\"".into()),
-		assertion: Equal::new(200),
-	})]
 }
 
 /// Configuration applied to all requests
@@ -133,16 +137,16 @@ pub struct Timing {
 impl From<HttpstatTiming> for Timing {
 	fn from(timing: HttpstatTiming) -> Self {
 		Self {
-			namelookup: timing.namelookup_time.as_millis() as u64,
-			connect: timing.connect_time.as_millis() as u64,
-			pretransfer: timing.pretransfer_time.as_millis() as u64,
-			starttransfer: timing.starttransfer_time.as_millis() as u64,
-			total: timing.total_time.as_millis() as u64,
-			dns_resolution: timing.dns_resolution_time.as_millis() as u64,
-			tcp_connection: timing.tcp_connection_time.as_millis() as u64,
-			tls_connection: timing.tls_connection_time.as_millis() as u64,
-			server_processing: timing.server_processing_time.as_millis() as u64,
-			content_transfer: timing.content_transfer_time.as_millis() as u64,
+			namelookup: timing.namelookup.as_millis() as u64,
+			connect: timing.connect.as_millis() as u64,
+			pretransfer: timing.pretransfer.as_millis() as u64,
+			starttransfer: timing.starttransfer.as_millis() as u64,
+			total: timing.total.as_millis() as u64,
+			dns_resolution: timing.dns_resolution.as_millis() as u64,
+			tcp_connection: timing.tcp_connection.as_millis() as u64,
+			tls_connection: timing.tls_connection.as_millis() as u64,
+			server_processing: timing.server_processing.as_millis() as u64,
+			content_transfer: timing.content_transfer.as_millis() as u64,
 		}
 	}
 }
@@ -238,70 +242,6 @@ pub enum Error {
 	DependencyError(Arc<RequestConfig>, String),
 }
 
-/// Run the request
-///
-/// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
-/// data.
-async fn run_request<C>(
-	config: Arc<Config>,
-	request_config: Arc<RequestConfig>,
-	context: Arc<Mutex<TemplateContext<C>>>,
-) -> RequestResult
-where
-	C: Serialize,
-{
-	let handlebars = Handlebars::new();
-
-	// Render header values with the template context
-	let headers = match request_config.headers {
-		Some(ref headers) => {
-			let mut joined_headers: Vec<String> = Vec::new();
-
-			for (header, value) in headers {
-				let rendered_value =
-					handlebars.render_template(value, &*context.lock().unwrap())?;
-				joined_headers.push(format!("{}: {}", header, rendered_value));
-			}
-
-			Some(joined_headers)
-		}
-		None => None,
-	};
-
-	let url = handlebars.render_template(&request_config.url, &*context.lock().unwrap())?;
-
-	let data = if let Some(ref data) = request_config.data {
-		// Read in a file for request content if the data property is prefixed with `'@'`,
-		// otherwise use whatever is set on [`RequestConfig::data`].
-		let data = match data.strip_prefix('@') {
-			Some(path) => fs::read_to_string(path)?,
-			None => data.clone(),
-		};
-
-		Some(handlebars.render_template(&data, &*context.lock().unwrap())?)
-	} else {
-		None
-	};
-
-	let httpstat_config = HttpstatConfig {
-		location: config.location,
-		insecure: config.insecure,
-		verbose: config.verbose,
-		connect_timeout: config.connect_timeout.map(Duration::from_millis),
-		max_response_size: config.max_response_size,
-
-		request_method: request_config.request_method.clone().into(),
-		url,
-		data,
-		headers,
-	};
-
-	match httpstat(&httpstat_config).await {
-		Ok(httpstat_result) => Ok((request_config, Arc::new(httpstat_result.into()))),
-		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
-	}
-}
-
 enum State<F>
 where
 	F: Future<Output = RequestResult>,
@@ -325,6 +265,7 @@ enum StateKey {
 type RequestResult = Result<(Arc<RequestConfig>, Arc<StatResult>)>;
 type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
+// TODO This future is not nice. Please make it nice.
 struct RequestsFuture<C>
 where
 	C: Serialize,
@@ -396,6 +337,7 @@ where
 	}
 }
 
+#[derive(Debug)]
 enum RequirementState {
 	Wait,
 	Success,
@@ -461,9 +403,10 @@ where
 			let requirements_validated = if !request_config.requires.is_empty() {
 				// If the request has requirements, ensure that they all exist otherwise it will
 				// never leave the Wait state.
-				let exists = all_map
-					.keys()
-					.all(|key| request_config.requires.iter().any(|r| key == r));
+				let exists = request_config
+					.requires
+					.iter()
+					.all(|r| all_map.keys().any(|key| r == key));
 
 				// If the request requires itself, it will sit in Wait indefinitely.
 				let requires_self = request_config.requires.iter().any(|r| match state_key {
@@ -572,6 +515,63 @@ where
 	}
 
 	all_ready
+}
+
+/// Run the request
+///
+/// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
+/// data.
+async fn run_request<C>(
+	config: Arc<Config>,
+	request_config: Arc<RequestConfig>,
+	context: Arc<Mutex<TemplateContext<C>>>,
+) -> RequestResult
+where
+	C: Serialize,
+{
+	let handlebars = Handlebars::new();
+
+	// Render header values with the template context
+	let headers = match request_config.headers {
+		Some(ref headers) => {
+			let mut joined_headers: Vec<String> = Vec::new();
+
+			for (header, value) in headers {
+				let rendered_value =
+					handlebars.render_template(value, &*context.lock().unwrap())?;
+				joined_headers.push(format!("{}: {}", header, rendered_value));
+			}
+
+			Some(joined_headers)
+		}
+		None => None,
+	};
+
+	let url =
+		Url::parse(&handlebars.render_template(&request_config.url, &*context.lock().unwrap())?)?;
+
+	let data = match request_config.data {
+		Some(ref data) => Some(handlebars.render_template(data, &*context.lock().unwrap())?),
+		None => None,
+	};
+
+	let httpstat_config = HttpstatConfig {
+		location: config.location,
+		insecure: config.insecure,
+		verbose: config.verbose,
+		connect_timeout: config.connect_timeout.map(Duration::from_millis),
+		max_response_size: config.max_response_size,
+
+		request_method: request_config.request_method.clone().into(),
+		url: url.into(),
+		data,
+		headers,
+	};
+
+	match httpstat(&httpstat_config).await {
+		Ok(httpstat_result) => Ok((request_config, Arc::new(httpstat_result.into()))),
+		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
+	}
 }
 
 /// Context applied to request data such as headers, urls, content body.

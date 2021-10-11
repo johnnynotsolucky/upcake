@@ -1,11 +1,12 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use futures::executor::block_on;
 use serde::Deserialize;
 use serde_yaml::Mapping;
-use std::fs;
+use std::path::{self, PathBuf};
+use std::{env, fs, process};
 use structopt::StructOpt;
 
-use upcake::reporters::SimpleReporter;
+use upcake::reporters::{Reporter, SimpleReporter};
 use upcake::{upcake, Config as UpcakeConfig, RequestConfig};
 
 /// Configuration applied to all requests
@@ -20,7 +21,7 @@ pub struct Config {
 	/// Maximum time allowed for connection
 	#[serde(default)]
 	pub connect_timeout: Option<u64>,
-	/// Set additional variables as key=value or YAML. For a file prepend with @
+	/// Set additional variables as YAML. For a file prepend with @
 	#[serde(default)]
 	extra_vars: Option<Mapping>,
 	/// Verbose output
@@ -33,8 +34,12 @@ pub struct Config {
 	pub requests: Vec<RequestConfig>,
 }
 
+const UPCAKE_CONFIG_ENV_KEY: &str = "UPCAKE_CONFIG";
+const UPCAKE_CONFIG_DEFAULT_FILE: &str = "Upcakefile.yaml";
+
 #[derive(Debug, Clone, StructOpt)]
 #[structopt()]
+/// Foo
 struct Opt {
 	#[structopt(short = "L", long = "location")]
 	/// Follow redirects
@@ -60,8 +65,13 @@ struct Opt {
 	/// Maximum response size in bytes
 	max_response_size: Option<usize>,
 
-	/// Path to the request config
-	config: String,
+	/// Path to the request config file
+	#[structopt(name = "PATH", short = "c", long = "config-file", env = UPCAKE_CONFIG_ENV_KEY)]
+	config: Option<String>,
+
+	/// URL to run default assertions against (Uses default request config)
+	#[structopt(name = "URL", short = "u", long = "url")]
+	url: Option<String>,
 }
 
 impl Opt {
@@ -85,8 +95,40 @@ impl Opt {
 }
 
 fn main() -> Result<()> {
+	match env::var(UPCAKE_CONFIG_ENV_KEY) {
+		Ok(path) => {
+			if path.trim().is_empty() {
+				env::set_var(UPCAKE_CONFIG_ENV_KEY, UPCAKE_CONFIG_DEFAULT_FILE);
+			}
+		}
+		Err(_) => {
+			env::set_var(UPCAKE_CONFIG_ENV_KEY, UPCAKE_CONFIG_DEFAULT_FILE);
+		}
+	}
+
 	let opt = Opt::from_args();
-	let mut config: Config = serde_yaml::from_str(&fs::read_to_string(&opt.config)?)?;
+
+	let mut config: Config;
+	let mut config_dir: PathBuf = env::current_dir()?;
+
+	if let Some(ref url) = opt.url {
+		config = Config {
+			requests: vec![RequestConfig {
+				url: url.clone(),
+				..Default::default()
+			}],
+			..Default::default()
+		}
+	} else if let Some(ref config_file) = opt.config {
+		config_dir = PathBuf::from(config_file);
+		config_dir.pop();
+		match fs::read_to_string(&path::Path::new(config_file)) {
+			Ok(config_file) => config = serde_yaml::from_str(&config_file)?,
+			Err(_) => return Err(anyhow!("Invalid config file: {}", config_file)),
+		}
+	} else {
+		unreachable!()
+	}
 
 	opt.merge_onto_config(&mut config);
 
@@ -118,6 +160,26 @@ fn main() -> Result<()> {
 		}
 	}
 
+	// Set the current working dir to be relative to the whatever directory the config file was
+	// loaded from.
+	let current_working_dir = env::current_dir()?;
+	env::set_current_dir(config_dir)?;
+	for mut request in &mut config.requests {
+		let mut file_data = None;
+		if let Some(ref data) = request.data {
+			// Read in a file for request content if the data property is prefixed with `'@'`,
+			// otherwise use whatever is set on [`RequestConfig::data`].
+			if let Some(path) = data.strip_prefix('@') {
+				file_data = Some(fs::read_to_string(path)?);
+			}
+		}
+
+		if file_data.is_some() {
+			request.data = file_data;
+		}
+	}
+	env::set_current_dir(current_working_dir)?;
+
 	let config = UpcakeConfig {
 		location: config.location,
 		insecure: config.insecure,
@@ -127,6 +189,12 @@ fn main() -> Result<()> {
 		requests: config.requests,
 	};
 
-	let mut reporter = SimpleReporter;
-	block_on(upcake(config, Some(context), &mut reporter))
+	let mut reporter = SimpleReporter::new();
+	block_on(upcake(config, Some(context), &mut reporter))?;
+
+	if !reporter.succeeded() {
+		process::exit(1);
+	}
+
+	Ok(())
 }

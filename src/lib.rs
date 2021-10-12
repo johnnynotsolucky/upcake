@@ -534,15 +534,18 @@ where
 	// Render header values with the template context
 	let headers = match request_config.headers {
 		Some(ref headers) => {
-			let mut joined_headers: Vec<String> = Vec::new();
+			let mut rendered_headers: Vec<Header> = Vec::new();
 
 			for (header, value) in headers {
 				let rendered_value =
 					handlebars.render_template(value, &*context.lock().unwrap())?;
-				joined_headers.push(format!("{}: {}", header, rendered_value));
+				rendered_headers.push(Header {
+					name: header.into(),
+					value: rendered_value,
+				});
 			}
 
-			Some(joined_headers)
+			Some(rendered_headers)
 		}
 		None => None,
 	};

@@ -1,11 +1,14 @@
 use anyhow::{anyhow, Result};
 use futures::executor::block_on;
+use httpstat::Header;
 use serde::Deserialize;
 use serde_yaml::Mapping;
+use std::collections::HashMap;
 use std::path::{self, PathBuf};
 use std::{env, fs, process};
 use structopt::StructOpt;
 
+use upcake::assertions::{AssertionConfig, Equal, RequestAssertionConfig};
 use upcake::reporters::{Reporter, SimpleReporter};
 use upcake::{upcake, Config as UpcakeConfig, RequestConfig};
 
@@ -39,7 +42,7 @@ const UPCAKE_CONFIG_DEFAULT_FILE: &str = "Upcakefile.yaml";
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt()]
-/// Foo
+/// Cupcakes for your API
 struct Opt {
 	#[structopt(short = "L", long = "location")]
 	/// Follow redirects
@@ -69,9 +72,33 @@ struct Opt {
 	#[structopt(name = "PATH", short = "c", long = "config-file", env = UPCAKE_CONFIG_ENV_KEY)]
 	config: Option<String>,
 
+	#[structopt(flatten)]
+	request: Request,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+#[structopt()]
+struct Request {
 	/// URL to run default assertions against (Uses default request config)
 	#[structopt(name = "URL", short = "u", long = "url")]
 	url: Option<String>,
+
+	#[structopt(
+		name = "command",
+		short = "X",
+		long = "request-method",
+		default_value = "GET"
+	)]
+	/// Specify request method to use. Used in conjunction with --url.
+	request_method: String,
+
+	#[structopt(short = "H", long = "header")]
+	/// Pass custom header(s) to server. Used in conjunction with --url.
+	headers: Option<Vec<Header>>,
+
+	#[structopt(long = "status-code", default_value = "200")]
+	/// Verify the response code. Used in conjunction with --url.
+	status_code: u16,
 }
 
 impl Opt {
@@ -111,10 +138,23 @@ fn main() -> Result<()> {
 	let mut config: Config;
 	let mut config_dir: PathBuf = env::current_dir()?;
 
-	if let Some(ref url) = opt.url {
+	if let Some(ref url) = opt.request.url {
+		let mut request_headers = HashMap::new();
+		if let Some(headers) = opt.request.headers.clone() {
+			for header in headers {
+				request_headers.insert(header.name, header.value);
+			}
+		}
 		config = Config {
 			requests: vec![RequestConfig {
 				url: url.clone(),
+				request_method: opt.request.request_method.clone(),
+				headers: Some(request_headers),
+				assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
+					skip: None,
+					path: Some(".\"response_code\"".into()),
+					assertion: Equal::new(opt.request.status_code),
+				})],
 				..Default::default()
 			}],
 			..Default::default()

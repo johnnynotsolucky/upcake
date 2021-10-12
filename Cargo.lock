@@ -957,9 +957,9 @@ checksum = "bc881b2c22681370c6a780e47af9840ef841837bc98118431d4e1868bd0c1086"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.29"
+version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9f5105d4fdaab20335ca9565e106a5d9b82b6219b5ba735731124ac6711d23d"
+checksum = "edc3358ebc67bc8b7fa0c007f945b0b18226f78437d61bec735a9eb96b61ee70"
 dependencies = [
  "unicode-xid",
 ]
@@ -1046,9 +1046,9 @@ dependencies = [
 
 [[package]]
 name = "rust-httpstat"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5e13c0dc75a9cb85b729533db5b10bd19a9360a999e9f092d5531e8ca1dcdc3"
+checksum = "914f35b29507dea89102323ed96085650e1ad6393c446b4ae1aaef125c1215ac"
 dependencies = [
  "anyhow",
  "curl",

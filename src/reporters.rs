@@ -8,19 +8,34 @@ pub trait Reporter {
 
 	fn step_result(&mut self, _result: AssertionResult) {}
 
-	fn bail(&mut self, _reason: String) {}
-
 	fn end(&mut self) {}
 
 	fn succeeded(&self) -> bool;
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct NoopReporter;
+pub struct ExitCodeReporter {
+	failed: bool,
+}
 
-impl Reporter for NoopReporter {
+impl ExitCodeReporter {
+	pub fn new() -> Self {
+		Self { failed: false }
+	}
+}
+
+impl Reporter for ExitCodeReporter {
+	fn step_result(&mut self, result: AssertionResult) {
+		match result {
+			AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
+				self.failed = true;
+			}
+			_ => {}
+		}
+	}
+
 	fn succeeded(&self) -> bool {
-		true
+		!self.failed
 	}
 }
 
@@ -91,7 +106,6 @@ impl Reporter for SimpleReporter {
 #[derive(Debug, Clone, Default)]
 pub struct TapReporter {
 	assertion_count: usize,
-	bailed: bool,
 	failed: bool,
 }
 
@@ -99,7 +113,6 @@ impl TapReporter {
 	pub fn new() -> Self {
 		Self {
 			assertion_count: 0,
-			bailed: false,
 			failed: false,
 		}
 	}
@@ -111,10 +124,6 @@ impl Reporter for TapReporter {
 	}
 
 	fn step_suite(&mut self, request_config: &RequestConfig) {
-		if self.bailed {
-			return;
-		}
-
 		if let Some(ref name) = request_config.name {
 			println!("#\n# {}\n#", name);
 		} else {
@@ -126,10 +135,6 @@ impl Reporter for TapReporter {
 	}
 
 	fn step_result(&mut self, result: AssertionResult) {
-		if self.bailed {
-			return;
-		}
-
 		self.assertion_count += 1;
 
 		match result {
@@ -181,24 +186,11 @@ impl Reporter for TapReporter {
 		}
 	}
 
-	fn bail(&mut self, reason: String) {
-		if self.bailed {
-			return;
-		}
-
-		self.bailed = true;
-		println!("Bail out! {}", reason);
-	}
-
 	fn end(&mut self) {
-		if self.bailed {
-			return;
-		}
-
 		println!("1..{}", self.assertion_count);
 	}
 
 	fn succeeded(&self) -> bool {
-		!self.bailed && !self.failed
+		!self.failed
 	}
 }

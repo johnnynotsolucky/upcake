@@ -56,9 +56,15 @@ cargo install --path .
   file, prepend the value with "@". Available in the template context in the `user` property.
 - `--connect-timeout` - Maximum time allowed for connection
 - `-c`, `--config-file` - Path to the request config file. Defaults to
-  "Upcakefile.yaml". Is required unless `--url` is set.
+  "Upcakefile.yaml". Required if `--url` is not set.
 - `-u`, `--url` - Run default assertions against a URL. Will use the default
-  request config. Is required unless `--config-file` is set.
+  request config. Required if `--config-file` is not set.
+- `-X`, `--request-method` - Specify request method to use. Used in conjunction
+  with `--url`. Defaults to "GET".
+- `-H`, `--header` - Pass custom headers to server. Used in conjunction with
+  `--url`.
+- `--status-code` - Verify the response code. Used in conjunction with `--url`.
+  Defaults to 200.
 
 **Note:** Configuration set from the command line will override configuration for that
 property set in the Upcakefile.
@@ -351,4 +357,49 @@ docker-compose --file examples/docker-compose.yaml up
 
 ```bash
 upcake --config-file examples/basic.yaml
+```
+
+### Command-line examples
+
+#### Inline POST request
+
+```bash
+upcake --url http://localhost:8888/post -X POST
+```
+
+#### Inline request with custom header
+
+```bash
+upcake --url http://localhost:8888/get -H "X-My-Token: token"
+```
+
+#### Inline request with environment variable
+
+```bash
+MY_TOKEN=token upcake --url http://localhost:8888/get -H "X-My-Token: {{env.MY_TOKEN}}"
+```
+
+#### Validate inline request status code
+
+```bash
+upcake --url http://localhost:8888/post -X PATCH --status-code 405
+```
+
+#### Dependencies example with AUTH_TOKEN
+
+```bash
+AUTH_TOKEN=my_token upcake --config-file ./examples/pipeline.yaml
+```
+
+#### Validation failure
+
+```bash
+upcake --url http://localhost:8888/post -X PATCH
+echo $?
+```
+
+#### Verbose output (libcurl)
+
+```bash
+upcake --url http://localhost:8888/get --verbose
 ```

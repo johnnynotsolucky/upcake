@@ -3,6 +3,10 @@ name = "upcake"
 version = "0.1.0"
 authors = ["Tyrone Tudehope <tyronetudehope@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "🧁 Upcake - Cupcakes for your API"
+repository = "https://github.com/johnnynotsolucky/upcake"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"

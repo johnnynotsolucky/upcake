@@ -297,6 +297,36 @@ Assert that a value is less than or equal to the given value
   value: 100
 ```
 
+### Response data
+
+#### Request result
+
+- `http_version` - The HTTP version used for the request.
+- `response_code` - The HTTP response code returned.
+- `response_message` - A HTTP response message returned from the host, if any.
+- `headers` - A list of response headers.
+- `timing` - Response timing data. See [timing results](#timing-results).
+- `content` - Response content, either formatted as JSON, or raw content if it
+couldn't be parsed as JSON.
+
+#### Timing results
+
+- `namelookup` - Duration in milliseconds from the start of the request until
+name lookup resolved.
+- `connect` - Duration in milliseconds from the start of the request until a
+connection to the remote host is established.
+- `pretransfer` - Duration in milliseconds from the start of the request until
+file transfer was about to begin.
+- `starttransfer` - Duration in milliseconds from the start of the request until
+the first byte was received. AKA TTFB.
+- `total` - Duration in milliseconds from the start of the request until the
+request ended.
+- `dns_resolution` - Alias for `namelookup`.
+- `tcp_connection` - Difference of `connect` and `namelookup`.
+- `tls_connection` - Difference of `pretransfer` and `connect`.
+- `server_processing` - Difference of `starttransfer` and `pretransfer`.
+- `content_transfer` - Difference of `total` and `starttransfer`.
+
 ## Examples
 
 Examples are in [examples](examples/).
@@ -305,16 +335,16 @@ They are configured to run against a local [httpbin](https://httpbin.org/) serve
 
 ### httpbin Server
 
-### Start with docker
+#### Start with docker
 
 ```bash
 docker run -p 8888:80 kennethreitz/httpbin
 ```
 
-### Start with docker-compose
+#### Start with docker-compose
 
 ```bash
-docker-compose --file examples/docker-compose.yaml up -d
+docker-compose --file examples/docker-compose.yaml up
 ```
 
 ### Run the examples

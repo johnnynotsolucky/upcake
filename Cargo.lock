@@ -621,19 +621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "httpstat"
-version = "0.1.0"
-source = "git+https://github.com/johnnynotsolucky/rust-httpstat#c109a5cb3d21c825e270936325fa210902bd2b98"
-dependencies = [
- "anyhow",
- "curl",
- "futures",
- "nanoid",
- "serde",
- "structopt",
-]
-
-[[package]]
 name = "idna"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1058,6 +1045,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-httpstat"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5e13c0dc75a9cb85b729533db5b10bd19a9360a999e9f092d5531e8ca1dcdc3"
+dependencies = [
+ "anyhow",
+ "curl",
+ "futures",
+ "nanoid",
+ "serde",
+ "structopt",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,8 +1317,8 @@ dependencies = [
  "anyhow",
  "futures",
  "handlebars",
- "httpstat",
  "jql",
+ "rust-httpstat",
  "serde",
  "serde_json",
  "serde_yaml",

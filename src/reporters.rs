@@ -9,46 +9,15 @@ pub trait Reporter {
 	fn step_result(&mut self, _result: AssertionResult) {}
 
 	fn end(&mut self) {}
-
-	fn succeeded(&self) -> bool;
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ExitCodeReporter {
-	failed: bool,
-}
+pub struct NoopReporter;
 
-impl ExitCodeReporter {
-	pub fn new() -> Self {
-		Self { failed: false }
-	}
-}
-
-impl Reporter for ExitCodeReporter {
-	fn step_result(&mut self, result: AssertionResult) {
-		match result {
-			AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
-				self.failed = true;
-			}
-			_ => {}
-		}
-	}
-
-	fn succeeded(&self) -> bool {
-		!self.failed
-	}
-}
+impl Reporter for NoopReporter {}
 
 #[derive(Debug, Clone, Default)]
-pub struct SimpleReporter {
-	failed: bool,
-}
-
-impl SimpleReporter {
-	pub fn new() -> Self {
-		Self { failed: false }
-	}
-}
+pub struct SimpleReporter;
 
 impl Reporter for SimpleReporter {
 	fn step_suite(&mut self, request_config: &RequestConfig) {
@@ -69,7 +38,6 @@ impl Reporter for SimpleReporter {
 				println!("  ✔ {}", assertion);
 			}
 			AssertionResult::Failure(assertion, value) => {
-				self.failed = true;
 				println!("  ✖ {}", assertion);
 
 				let message = serde_yaml::to_string(&value).unwrap();
@@ -87,34 +55,24 @@ impl Reporter for SimpleReporter {
 				}
 			}
 			AssertionResult::FailureOther(Some(assertion), message) => {
-				self.failed = true;
 				println!("  ✖ {}", assertion);
 				println!("    message: {}", message);
 			}
 			AssertionResult::FailureOther(None, message) => {
-				self.failed = true;
 				println!("  ✖ {}", message);
 			}
 		}
-	}
-
-	fn succeeded(&self) -> bool {
-		!self.failed
 	}
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TapReporter {
 	assertion_count: usize,
-	failed: bool,
 }
 
 impl TapReporter {
 	pub fn new() -> Self {
-		Self {
-			assertion_count: 0,
-			failed: false,
-		}
+		Self { assertion_count: 0 }
 	}
 }
 
@@ -148,7 +106,6 @@ impl Reporter for TapReporter {
 				println!("ok {} - {}", self.assertion_count, assertion);
 			}
 			AssertionResult::Failure(assertion, value) => {
-				self.failed = true;
 				println!("not ok {} - {}", self.assertion_count, assertion);
 
 				println!("  ---");
@@ -172,7 +129,6 @@ impl Reporter for TapReporter {
 				println!("  ---");
 			}
 			AssertionResult::FailureOther(Some(assertion), message) => {
-				self.failed = true;
 				println!("not ok {} - {}", self.assertion_count, assertion);
 				println!("  ---");
 				println!("  assertion: {}", assertion);
@@ -180,7 +136,6 @@ impl Reporter for TapReporter {
 				println!("  ---");
 			}
 			AssertionResult::FailureOther(None, message) => {
-				self.failed = true;
 				println!("not ok {} - {}", self.assertion_count, message);
 			}
 		}
@@ -188,9 +143,5 @@ impl Reporter for TapReporter {
 
 	fn end(&mut self) {
 		println!("1..{}", self.assertion_count);
-	}
-
-	fn succeeded(&self) -> bool {
-		!self.failed
 	}
 }

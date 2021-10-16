@@ -9,12 +9,18 @@ use std::{env, fs, process};
 use structopt::StructOpt;
 
 use upcake::assertions::{AssertionConfig, Equal, RequestAssertionConfig};
-use upcake::reporters::{Reporter, SimpleReporter};
-use upcake::{upcake, Config as UpcakeConfig, RequestConfig};
+use upcake::reporters::SimpleReporter;
+use upcake::{upcake, Config as UpcakeConfig, RequestConfig, UpcakeResult};
+
+const UPCAKE_CONFIG_ENV_KEY: &str = "UPCAKE_CONFIG";
+const UPCAKE_CONFIG_DEFAULT_FILE: &str = "Upcakefile.yaml";
 
 /// Configuration applied to all requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config {
+	/// An optional prefix to filter environment variables injected into the template context
+	#[serde(default)]
+	pub env_var_prefix: Option<String>,
 	/// Follow redirects
 	#[serde(default)]
 	pub location: bool,
@@ -37,35 +43,34 @@ pub struct Config {
 	pub requests: Vec<RequestConfig>,
 }
 
-const UPCAKE_CONFIG_ENV_KEY: &str = "UPCAKE_CONFIG";
-const UPCAKE_CONFIG_DEFAULT_FILE: &str = "Upcakefile.yaml";
-
 #[derive(Debug, Clone, StructOpt)]
 #[structopt()]
-/// Cupcakes for your API
 struct Opt {
-	#[structopt(short = "L", long = "location")]
+	/// An optional prefix to filter environment variables injected into the template context
+	#[structopt(long = "env-var-prefix")]
+	env_var_prefix: Option<String>,
 	/// Follow redirects
+	#[structopt(short = "L", long = "location")]
 	location: bool,
 
-	#[structopt(short = "k", long = "insecure")]
 	/// Allow insecure server connections when using SSL
+	#[structopt(short = "k", long = "insecure")]
 	insecure: bool,
 
-	#[structopt(name = "MILLIS", long = "connect-timeout")]
 	/// Maximum time allowed for connection
+	#[structopt(name = "MILLIS", long = "connect-timeout")]
 	connect_timeout: Option<u64>,
 
-	#[structopt(name = "EXTRA_VARS", short = "e", long = "extra-vars")]
 	/// Set additional variables as key=value or YAML. For a file prepend with @
+	#[structopt(name = "EXTRA_VARS", short = "e", long = "extra-vars")]
 	extra_vars: Option<Vec<String>>,
 
-	#[structopt(short = "v", long = "verbose")]
 	/// Verbose output
+	#[structopt(short = "v", long = "verbose")]
 	verbose: bool,
 
-	#[structopt(name = "BYTES", short = "s", long = "max-response-size")]
 	/// Maximum response size in bytes
+	#[structopt(name = "BYTES", short = "s", long = "max-response-size")]
 	max_response_size: Option<usize>,
 
 	/// Path to the request config file
@@ -83,26 +88,29 @@ struct Request {
 	#[structopt(name = "URL", short = "u", long = "url")]
 	url: Option<String>,
 
+	/// Specify request method to use. Used in conjunction with --url.
 	#[structopt(
 		name = "command",
 		short = "X",
 		long = "request-method",
 		default_value = "GET"
 	)]
-	/// Specify request method to use. Used in conjunction with --url.
 	request_method: String,
 
-	#[structopt(short = "H", long = "header")]
 	/// Pass custom header(s) to server. Used in conjunction with --url.
+	#[structopt(short = "H", long = "header")]
 	headers: Option<Vec<Header>>,
 
-	#[structopt(long = "status-code", default_value = "200")]
 	/// Verify the response code. Used in conjunction with --url.
+	#[structopt(long = "status-code", default_value = "200")]
 	status_code: u16,
 }
 
 impl Opt {
 	fn merge_onto_config(&self, config: &mut Config) {
+		if let Some(ref env_var_prefix) = self.env_var_prefix {
+			config.env_var_prefix = Some(env_var_prefix.clone());
+		}
 		if self.location {
 			config.location = self.location;
 		}
@@ -221,6 +229,7 @@ fn main() -> Result<()> {
 	env::set_current_dir(current_working_dir)?;
 
 	let config = UpcakeConfig {
+		env_var_prefix: config.env_var_prefix,
 		location: config.location,
 		insecure: config.insecure,
 		connect_timeout: config.connect_timeout,
@@ -229,11 +238,11 @@ fn main() -> Result<()> {
 		requests: config.requests,
 	};
 
-	let mut reporter = SimpleReporter::new();
-	block_on(upcake(config, Some(context), &mut reporter))?;
+	let mut reporter = SimpleReporter;
+	let res = block_on(upcake(config, Some(context), &mut reporter))?;
 
-	if !reporter.succeeded() {
-		process::exit(1);
+	if let UpcakeResult::Failures(failure_count) = res {
+		process::exit(failure_count as i32);
 	}
 
 	Ok(())

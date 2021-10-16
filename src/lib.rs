@@ -92,6 +92,8 @@ where
 /// Configuration applied to all requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config {
+	/// An optional prefix to filter environment variables injected into the template context
+	pub env_var_prefix: Option<String>,
 	/// Follow redirects
 	pub location: bool,
 	/// Allow insecure server connections when using SSL
@@ -292,12 +294,20 @@ where
 			};
 			request_config_map.insert(state_key, State::Wait(Arc::new(request_config)));
 		}
+
+		let envvars = env::vars()
+			.filter(|(key, _value)| match config.env_var_prefix {
+				Some(ref env_var_prefix) => key.starts_with(env_var_prefix),
+				None => true,
+			})
+			.collect();
+
 		Self {
 			// Set up the template context to include the optional user context, environment variables
 			// and an empty map of requests.
 			context: Arc::new(Mutex::new(TemplateContext {
 				user: context,
-				env: env::vars().collect(),
+				env: envvars,
 				requests: HashMap::new(),
 			})),
 			config: Arc::new(config),
@@ -593,8 +603,22 @@ where
 	requests: HashMap<String, ResponseData>,
 }
 
+/// Final results of all requests and assertions.
+pub enum UpcakeResult {
+	/// Variant returned when all requests were successful and their assertions passed.
+	Success,
+	/// Count of failed requests and/or assertion failures.
+	Failures(usize),
+}
+
+/// TODO Add docs please
 ///
-pub async fn upcake<C, R>(config: Config, context: Option<C>, reporter: &mut R) -> Result<()>
+/// Returns
+pub async fn upcake<C, R>(
+	config: Config,
+	context: Option<C>,
+	reporter: &mut R,
+) -> Result<UpcakeResult>
 where
 	C: Serialize + 'static,
 	R: Reporter,
@@ -603,6 +627,8 @@ where
 
 	let results = RequestsFuture::new(config, context).await?;
 
+	let mut failure_count = 0;
+
 	for result in results {
 		match result {
 			Ok((request_config, stat_result)) => {
@@ -610,26 +636,46 @@ where
 				let result = serde_yaml::to_value(&*stat_result)?;
 
 				for assertion in request_config.assertions.iter() {
-					reporter.step_result(assertion.assert(&result)?);
+					let assertion_result = assertion.assert(&result)?;
+
+					// If there is any type of failure, increment the failure_count.
+					match assertion_result {
+						AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
+							failure_count += 1;
+						}
+						_ => {}
+					}
+
+					reporter.step_result(assertion_result);
 				}
 			}
-			Err(error) => match error.downcast_ref::<Error>() {
-				Some(error) => {
-					let request_config = match error {
-						Error::RequestError(request_config, _) => request_config,
-						Error::DependencyError(request_config, _) => request_config,
-					};
-					reporter.step_suite(request_config);
-					reporter.step_result(AssertionResult::FailureOther(None, error.to_string()));
-				}
-				None => {
-					reporter.step_result(AssertionResult::FailureOther(None, format!("{}", error)));
-				}
-			},
+			Err(error) => {
+				// Request errors count towards failure counts.
+				failure_count += 1;
+				match error.downcast_ref::<Error>() {
+					Some(error) => {
+						let request_config = match error {
+							Error::RequestError(request_config, _) => request_config,
+							Error::DependencyError(request_config, _) => request_config,
+						};
+						reporter.step_suite(request_config);
+						reporter
+							.step_result(AssertionResult::FailureOther(None, error.to_string()));
+					}
+					None => {
+						reporter
+							.step_result(AssertionResult::FailureOther(None, format!("{}", error)));
+					}
+				};
+			}
 		}
 	}
 
 	reporter.end();
 
-	Ok(())
+	if failure_count == 0 {
+		Ok(UpcakeResult::Success)
+	} else {
+		Ok(UpcakeResult::Failures(failure_count))
+	}
 }

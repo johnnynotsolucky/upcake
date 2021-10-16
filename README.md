@@ -48,6 +48,8 @@ cargo install --path .
 
 ### Command-line options
 
+- `--env-var-prefix` - An optional prefix to filter environment variables
+  injected into the template context
 - `-k`, `--insecure` - Allow insecure server connections when using SSL
 - `-L`, `--location` - Follow redirects
 - `-v`, `--verbose` - Verbose output

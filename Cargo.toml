@@ -1,10 +1,10 @@
 [package]
 name = "upcake"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Tyrone Tudehope <tyronetudehope@gmail.com>"]
 edition = "2018"
 license = "MIT"
-description = "🧁 Upcake - Cupcakes for your API"
+description = "Fast, easy and consistent testing for web APIs"
 repository = "https://github.com/johnnynotsolucky/upcake"
 readme = "README.md"
 

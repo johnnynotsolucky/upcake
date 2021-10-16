@@ -32,7 +32,7 @@ requests:
     data: "@data.hbs"
     assertions:
       - type: equal
-        path: ."content"."datal"
+        path: ."content"."data"
         value: "{\n  \"request_a\": \"A Var\",\n  \"slide\": \"Wake up to WonderWidgets!\",\n}\n"
 
       - type: between
@@ -50,7 +50,7 @@ requests:
         path: ."headers".[]
         assertion:
           type: equal
-          value: 8
+          value: 7
 
       - type: contains
         path: ."headers".[]

@@ -27,8 +27,10 @@ requests:
     requires: ["Request A", "Request B"]
     url: "http://localhost:8888/post"
     headers:
-      "Content-Type": "application/json"
-      "Authorization": "Bearer {{env.AUTH_TOKEN}}"
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{env.AUTH_TOKEN}}
     data: "@data.hbs"
     assertions:
       - type: equal

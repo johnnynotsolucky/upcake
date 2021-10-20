@@ -3,7 +3,6 @@ use futures::executor::block_on;
 use httpstat::Header;
 use serde::Deserialize;
 use serde_yaml::Mapping;
-use std::collections::HashMap;
 use std::path::{self, PathBuf};
 use std::{env, fs, process};
 use structopt::StructOpt;
@@ -147,17 +146,11 @@ fn main() -> Result<()> {
 	let mut config_dir: PathBuf = env::current_dir()?;
 
 	if let Some(ref url) = opt.request.url {
-		let mut request_headers = HashMap::new();
-		if let Some(headers) = opt.request.headers.clone() {
-			for header in headers {
-				request_headers.insert(header.name, header.value);
-			}
-		}
 		config = Config {
 			requests: vec![RequestConfig {
 				url: url.clone(),
 				request_method: opt.request.request_method.clone(),
-				headers: Some(request_headers),
+				headers: opt.request.headers.clone(),
 				assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
 					skip: None,
 					path: Some(".\"response_code\"".into()),

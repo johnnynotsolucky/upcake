@@ -43,10 +43,10 @@ pub struct RequestConfig {
 	///
 	/// Contents are rendered with [`mod@handlebars`].
 	pub data: Option<String>,
-	/// Key/Value pairs of headers to send with the request
+	/// List of headers to send with the request
 	///
 	/// Header values are rendered with [`mod@handlebars`].
-	pub headers: Option<HashMap<String, String>>,
+	pub headers: Option<Vec<Header>>,
 	/// The url to request
 	///
 	/// The url string is rendered with [`mod@handlebars`].
@@ -546,12 +546,10 @@ where
 		Some(ref headers) => {
 			let mut rendered_headers: Vec<Header> = Vec::new();
 
-			for (header, value) in headers {
-				let rendered_value =
-					handlebars.render_template(value, &*context.lock().unwrap())?;
+			for header in headers {
 				rendered_headers.push(Header {
-					name: header.into(),
-					value: rendered_value,
+					name: header.name.clone(),
+					value: handlebars.render_template(&header.value, &*context.lock().unwrap())?,
 				});
 			}
 

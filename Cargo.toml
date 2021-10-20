@@ -4,7 +4,7 @@ version = "0.1.2"
 authors = ["Tyrone Tudehope <tyronetudehope@gmail.com>"]
 edition = "2018"
 license = "MIT"
-description = "Fast, easy and consistent testing for web APIs"
+description = "Fast, easy and consistent testing for HTTP APIs"
 repository = "https://github.com/johnnynotsolucky/upcake"
 readme = "README.md"
 

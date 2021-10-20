@@ -123,7 +123,7 @@ requests:
     - name: Content-Type
       value: application/json
   headers_template: |
-    {{#each requests.[A].headers}}
+    {{#each requests.[Request A].headers}}
       {{#if (eq name "Set-Cookie")}}
     Cookie: {{value}}
       {{/if}}

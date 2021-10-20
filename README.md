@@ -18,7 +18,7 @@ other, provided that dependency requests are named. Assertions can be against
 request timing data and any response data including headers, content and
 response code.
 
-The request URL, headers and content support template rendering with
+The request URL, headers, headers_template and content support template rendering with
 [Handlebars](https://docs.rs/handlebars/4.1.3/handlebars/index.html) syntax.
 
 Requests are run in parallel except where they have a dependency to another
@@ -56,7 +56,7 @@ cargo install --path .
 - `-s`, `--max-response-size` - Maximum response size in bytes
 - `-e`, `--extra-vars` Set additional variables as key=value or YAML. To use a
   file, prepend the value with "@". Available in the template context in the `user` property.
-- `--connect-timeout` - Maximum time allowed for connection
+- `--connect-timeout` - Maximum time allowed for connection in milliseconds
 - `-c`, `--config-file` - Path to the request config file. Defaults to
   "Upcakefile.yaml". Required if `--url` is not set.
 - `-u`, `--url` - Run default assertions against a URL. Will use the default
@@ -85,6 +85,20 @@ property set in the Upcakefile.
   `--max-response-size`.
 - `requests` - List of request configurations.
 
+#### Example
+
+```yaml
+location: false
+insecure: false
+connect_timeout: 100
+extra_vars:
+  my_var: Some Value
+verbose: true
+max_response_size: 32000
+requests:
+  - url: "http://localhost:8888/post"
+```
+
 ### Request configuration
 
 - `name` _optional_ -  Name of the request.
@@ -92,14 +106,53 @@ property set in the Upcakefile.
 - `request_method` _optional_ - The HTTP method to use. Defaults to "GET".
 - `data` _optional_ - Data to send with the request. Send the contents of a file by prefixing the value with an "@", for example "@path/to/body/template.hbs". Relative paths are relative to the directory of the loaded configuration file.
 - `headers`_optional_ - Mapping of headers to be sent.
+- `headers_template` _optional_ - Render raw headers from a template.
 - `url`- The URL to make the request to.
 - `assertions` _optional_ - A list of assertions to perform on the response. Defaults to a HTTP 200 assertion.
+
+#### Example
+
+```yaml
+- name: "Request B"
+  requires: ["Request A"]
+  request_method: "POST"
+  data: "@data.hbs"
+  headers:
+    - name: Accept
+      value: application/json
+    - name: Content-Type
+      value: application/json
+  headers_template: |
+    {{#each requests.[A].headers}}
+      {{#if (eq name "Set-Cookie")}}
+    Cookie: {{value}}
+      {{/if}}
+    {{/each}}
+  url: "http://localhost:8888/post"
+  assertions:
+    - type: equal
+      path: ."response_code"
+      value: 200
+```
 
 ### Assertion configuration
 
 - `type` - The type of assertion to use. See [available assertions](#available-assertions).
 - `path` - The [jql](https://crates.io/crates/jql) path to the field the assertion should run against. Defaults to `.`. `path` is ignored on inner assertions, for example the [length](#length) assertion.
 - `skip` _optional_ - Whether to skip the assertion. If set, requires a string value for the reason.
+- `assertion` - The assertion to apply
+
+
+#### Example
+
+```yaml
+- type: length
+  path: ."content"."slideshow"."slides".[]
+  skip: Some reason for skipping the assertion
+  assertion:
+    type: equal
+    value: 2
+```
 
 ### Available assertions
 

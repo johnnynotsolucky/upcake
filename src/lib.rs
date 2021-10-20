@@ -47,6 +47,10 @@ pub struct RequestConfig {
 	///
 	/// Header values are rendered with [`mod@handlebars`].
 	pub headers: Option<Vec<Header>>,
+	/// Render raw headers from a template
+	///
+	/// Merged with [`headers`].
+	pub headers_template: Option<String>,
 	/// The url to request
 	///
 	/// The url string is rendered with [`mod@handlebars`].
@@ -63,6 +67,7 @@ impl Default for RequestConfig {
 			request_method: "GET".into(),
 			data: Default::default(),
 			headers: Default::default(),
+			headers_template: Default::default(),
 			url: Default::default(),
 			assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
 				skip: None,
@@ -542,9 +547,9 @@ where
 	let handlebars = Handlebars::new();
 
 	// Render header values with the template context
-	let headers = match request_config.headers {
+	let mut headers = match request_config.headers {
 		Some(ref headers) => {
-			let mut rendered_headers: Vec<Header> = Vec::new();
+			let mut rendered_headers = Vec::new();
 
 			for header in headers {
 				rendered_headers.push(Header {
@@ -557,6 +562,29 @@ where
 		}
 		None => None,
 	};
+
+	if let Some(ref headers_template) = request_config.headers_template {
+		let rendered_headers_template =
+			handlebars.render_template(headers_template, &*context.lock().unwrap())?;
+
+		let mut rendered_headers = Vec::new();
+		for line in rendered_headers_template.lines() {
+			if let Some((name, value)) = line.split_once(':') {
+				rendered_headers.push(Header {
+					name: name.into(),
+					value: value.trim_start().into(),
+				});
+			}
+		}
+
+		let mut inner_headers = if let Some(headers) = headers {
+			headers
+		} else {
+			Vec::new()
+		};
+		inner_headers.extend_from_slice(&rendered_headers);
+		headers = Some(inner_headers);
+	}
 
 	let url =
 		Url::parse(&handlebars.render_template(&request_config.url, &*context.lock().unwrap())?)?;

@@ -7,6 +7,9 @@ requests:
   - url: "http://localhost:8888/json"
     name: "Request B"
     request_method: "GET"
+    headers:
+      - name: Accept
+        value: application/json
     assertions:
       - type: equal
         path: ."response_code"
@@ -23,14 +26,11 @@ requests:
           value: 2
 
   - request_method: "POST"
-    name: "  "
     requires: ["Request A", "Request B"]
     url: "http://localhost:8888/post"
-    headers:
-      - name: Content-Type
-        value: application/json
-      - name: Authorization
-        value: Bearer {{env.AUTH_TOKEN}}
+    headers_template: |
+      Content-Type: application/json
+      Authorization: Bearer {{env.AUTH_TOKEN}}
     data: "@data.hbs"
     assertions:
       - type: equal

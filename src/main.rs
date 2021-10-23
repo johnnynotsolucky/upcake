@@ -35,6 +35,9 @@ pub struct Config {
 	/// Verbose output
 	#[serde(default)]
 	pub verbose: bool,
+	/// Fail on HTTP error response codes
+	#[serde(default)]
+	pub fail_request: bool,
 	/// Maximum response size in bytes
 	#[serde(default)]
 	pub max_response_size: Option<usize>,
@@ -67,6 +70,10 @@ struct Opt {
 	/// Verbose output
 	#[structopt(short = "v", long = "verbose")]
 	verbose: bool,
+
+	/// Fail request on HTTP error response codes
+	#[structopt(long = "fail-request")]
+	pub fail_request: bool,
 
 	/// Maximum response size in bytes
 	#[structopt(name = "BYTES", short = "s", long = "max-response-size")]
@@ -122,6 +129,9 @@ impl Opt {
 		if self.verbose {
 			config.verbose = self.verbose;
 		}
+		if self.fail_request {
+			config.fail_request = self.fail_request
+		}
 		if let Some(max_response_size) = self.max_response_size {
 			config.max_response_size = Some(max_response_size);
 		}
@@ -161,8 +171,12 @@ fn main() -> Result<()> {
 			..Default::default()
 		}
 	} else if let Some(ref config_file) = opt.config {
-		config_dir = PathBuf::from(config_file);
-		config_dir.pop();
+		if let Some(parent) = PathBuf::from(config_file).parent() {
+			if !parent.as_os_str().is_empty() {
+				config_dir = parent.to_path_buf();
+			}
+		}
+
 		match fs::read_to_string(&path::Path::new(config_file)) {
 			Ok(config_file) => config = serde_yaml::from_str(&config_file)?,
 			Err(_) => return Err(anyhow!("Invalid config file: {}", config_file)),
@@ -204,6 +218,7 @@ fn main() -> Result<()> {
 	// Set the current working dir to be relative to the whatever directory the config file was
 	// loaded from.
 	let current_working_dir = env::current_dir()?;
+	println!("{:?}", config_dir);
 	env::set_current_dir(config_dir)?;
 	for mut request in &mut config.requests {
 		let mut file_data = None;
@@ -227,6 +242,7 @@ fn main() -> Result<()> {
 		insecure: config.insecure,
 		connect_timeout: config.connect_timeout,
 		verbose: config.verbose,
+		fail_request: config.fail_request,
 		max_response_size: config.max_response_size,
 		requests: config.requests,
 	};

@@ -2,7 +2,7 @@ pub mod assertions;
 pub mod reporters;
 
 use anyhow::Result;
-use handlebars::{Handlebars, handlebars_helper};
+use handlebars::{handlebars_helper, Handlebars};
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::de::Deserializer;
@@ -107,6 +107,8 @@ pub struct Config {
 	pub connect_timeout: Option<u64>,
 	/// Verbose output
 	pub verbose: bool,
+	/// Fail on HTTP error response codes
+	pub fail_request: bool,
 	/// Maximum response size in bytes
 	pub max_response_size: Option<usize>,
 	/// Requests to run
@@ -615,7 +617,17 @@ where
 	};
 
 	match httpstat(&httpstat_config).await {
-		Ok(httpstat_result) => Ok((request_config, Arc::new(httpstat_result.into()))),
+		Ok(httpstat_result) => {
+			if config.fail_request && (400..600).contains(&httpstat_result.response_code) {
+				Err(Error::RequestError(
+					request_config,
+					format!("HTTP {}", httpstat_result.response_code),
+				)
+				.into())
+			} else {
+				Ok((request_config, Arc::new(httpstat_result.into())))
+			}
+		}
 		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
 	}
 }

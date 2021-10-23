@@ -53,6 +53,7 @@ cargo install --path .
 - `-k`, `--insecure` - Allow insecure server connections when using SSL
 - `-L`, `--location` - Follow redirects
 - `-v`, `--verbose` - Verbose output
+- `--fail-request` - Fail request on HTTP error response codes
 - `-s`, `--max-response-size` - Maximum response size in bytes
 - `-e`, `--extra-vars` Set additional variables as key=value or YAML. To use a
   file, prepend the value with "@". Available in the template context in the `user` property.
@@ -81,6 +82,7 @@ property set in the Upcakefile.
 - `extra_vars` - Set additional variables from YAML mapping. Merged with vars
   set with `--extra-vars`. Available in the template context in the `user` property.
 - `verbose` - Verbose output. Overridden by `--verbose`.
+- `fail_request` - Fail request on HTTP error response codes
 - `max_response_size` - Maximum response size in bytes. Overridden by
   `--max-response-size`.
 - `requests` - List of request configurations.

@@ -125,7 +125,7 @@ requests:
     - name: Content-Type
       value: application/json
   headers_template: |
-    {{#each requests.[A].headers}}
+    {{#each requests.[Request A].headers}}
       {{#if (eqi name "Set-Cookie")}}
     Cookie: {{value}}
       {{/if}}

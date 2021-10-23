@@ -124,7 +124,7 @@ requests:
       value: application/json
   headers_template: |
     {{#each requests.[A].headers}}
-      {{#if (eq name "Set-Cookie")}}
+      {{#if (eqi name "Set-Cookie")}}
     Cookie: {{value}}
       {{/if}}
     {{/each}}
@@ -387,6 +387,16 @@ request ended.
 - `tls_connection` - Difference of `pretransfer` and `connect`.
 - `server_processing` - Difference of `starttransfer` and `pretransfer`.
 - `content_transfer` - Difference of `total` and `starttransfer`.
+
+### Handlebars
+
+#### Helpers
+
+- [Built-in
+  helpers](https://docs.rs/handlebars/*/handlebars/#built-in-helpers)
+- Boolean helpers:
+  - `eqi` - Case-insensitive equals
+  - `nei` - Case-insensitive not equals
 
 ## Examples
 

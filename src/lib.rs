@@ -2,7 +2,7 @@ pub mod assertions;
 pub mod reporters;
 
 use anyhow::Result;
-use handlebars::Handlebars;
+use handlebars::{Handlebars, handlebars_helper};
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::de::Deserializer;
@@ -347,6 +347,7 @@ where
 
 			Poll::Ready(Ok(results))
 		} else {
+			context.waker().wake_by_ref();
 			Poll::Pending
 		}
 	}
@@ -532,6 +533,9 @@ where
 	all_ready
 }
 
+handlebars_helper!(eqi: |x: String, y: String| x.to_lowercase() == y.to_lowercase());
+handlebars_helper!(nei: |x: String, y: String| x.to_lowercase() != y.to_lowercase());
+
 /// Run the request
 ///
 /// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
@@ -544,7 +548,10 @@ async fn run_request<C>(
 where
 	C: Serialize,
 {
-	let handlebars = Handlebars::new();
+	// TODO move Handlebars setup out of run_request
+	let mut handlebars = Handlebars::new();
+	handlebars.register_helper("eqi", Box::new(eqi));
+	handlebars.register_helper("nei", Box::new(nei));
 
 	// Render header values with the template context
 	let mut headers = match request_config.headers {

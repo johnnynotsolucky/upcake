@@ -106,7 +106,7 @@ struct Request {
 }
 
 impl Opt {
-	fn merge_onto_config(&self, config: &mut Config) {
+	fn merge_with_config(&self, config: &mut Config) {
 		if let Some(ref env_var_prefix) = self.env_var_prefix {
 			config.env_var_prefix = Some(env_var_prefix.clone());
 		}
@@ -171,7 +171,7 @@ fn main() -> Result<()> {
 		unreachable!()
 	}
 
-	opt.merge_onto_config(&mut config);
+	opt.merge_with_config(&mut config);
 
 	let mut context = Mapping::new();
 	if let Some(extra_vars) = config.extra_vars {

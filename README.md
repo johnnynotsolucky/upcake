@@ -107,7 +107,7 @@ requests:
 - `requires` _optional_ - List of named requests this request depends upon.
 - `request_method` _optional_ - The HTTP method to use. Defaults to "GET".
 - `data` _optional_ - Data to send with the request. Send the contents of a file by prefixing the value with an "@", for example "@path/to/body/template.hbs". Relative paths are relative to the directory of the loaded configuration file.
-- `headers`_optional_ - Either a list of headers or a template to render raw headers from.
+- `headers` _optional_ - Either a list of headers or a template to render raw headers from.
 - `url`- The URL to make the request to.
 - `assertions` _optional_ - A list of assertions to perform on the response. Defaults to a HTTP 200 assertion.
 

@@ -5,12 +5,14 @@ use anyhow::Result;
 use handlebars::{handlebars_helper, Handlebars};
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
-use serde::de::Deserializer;
+use serde::de::value::SeqAccessDeserializer;
+use serde::de::{Deserializer, IntoDeserializer, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fmt::{self, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::str;
@@ -25,6 +27,54 @@ use reporters::Reporter;
 
 /// Re-export [`serde_yaml::Value`].
 pub use serde_yaml::Value;
+
+#[derive(Debug, Clone)]
+pub enum HeaderValue {
+	/// List of headers to send with the request
+	///
+	/// Header values are rendered with [`mod@handlebars`].
+	List(Vec<Header>),
+	/// Render raw headers from a template
+	///
+	/// Template is rendered with [`mod@handlebars`].
+	Template(String),
+}
+
+impl<'de> Deserialize<'de> for HeaderValue {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		struct HeaderValueVisitor;
+
+		impl<'de> Visitor<'de> for HeaderValueVisitor {
+			type Value = HeaderValue;
+
+			fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+				formatter.write_str("Header template or list of headers")
+			}
+
+			fn visit_str<E>(self, value: &str) -> Result<HeaderValue, E>
+			where
+				E: serde::de::Error,
+			{
+				let template: String = Deserialize::deserialize(value.into_deserializer())?;
+				Ok(HeaderValue::Template(template))
+			}
+
+			fn visit_seq<V>(self, seq: V) -> Result<HeaderValue, V::Error>
+			where
+				V: SeqAccess<'de>,
+			{
+				let headers: Vec<Header> =
+					Deserialize::deserialize(SeqAccessDeserializer::new(seq))?;
+				Ok(HeaderValue::List(headers))
+			}
+		}
+
+		deserializer.deserialize_any(HeaderValueVisitor)
+	}
+}
 
 /// Configuration for individual requests
 #[derive(Deserialize, Debug, Clone)]
@@ -43,14 +93,8 @@ pub struct RequestConfig {
 	///
 	/// Contents are rendered with [`mod@handlebars`].
 	pub data: Option<String>,
-	/// List of headers to send with the request
-	///
-	/// Header values are rendered with [`mod@handlebars`].
-	pub headers: Option<Vec<Header>>,
-	/// Render raw headers from a template
-	///
-	/// Merged with [`headers`].
-	pub headers_template: Option<String>,
+	/// Headers to pass to the request
+	pub headers: Option<HeaderValue>,
 	/// The url to request
 	///
 	/// The url string is rendered with [`mod@handlebars`].
@@ -67,7 +111,6 @@ impl Default for RequestConfig {
 			request_method: "GET".into(),
 			data: Default::default(),
 			headers: Default::default(),
-			headers_template: Default::default(),
 			url: Default::default(),
 			assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
 				skip: None,
@@ -556,8 +599,9 @@ where
 	handlebars.register_helper("nei", Box::new(nei));
 
 	// Render header values with the template context
-	let mut headers = match request_config.headers {
-		Some(ref headers) => {
+	let headers = match request_config.headers {
+		Some(HeaderValue::List(ref headers)) => {
+			// Some(ref headers) => {
 			let mut rendered_headers = Vec::new();
 
 			for header in headers {
@@ -567,33 +611,26 @@ where
 				});
 			}
 
-			Some(rendered_headers)
+			rendered_headers
 		}
-		None => None,
-	};
+		Some(HeaderValue::Template(ref template)) => {
+			let rendered_template =
+				handlebars.render_template(template, &*context.lock().unwrap())?;
 
-	if let Some(ref headers_template) = request_config.headers_template {
-		let rendered_headers_template =
-			handlebars.render_template(headers_template, &*context.lock().unwrap())?;
-
-		let mut rendered_headers = Vec::new();
-		for line in rendered_headers_template.lines() {
-			if let Some((name, value)) = line.split_once(':') {
-				rendered_headers.push(Header {
-					name: name.into(),
-					value: value.trim_start().into(),
-				});
+			let mut rendered_headers = Vec::new();
+			for line in rendered_template.lines() {
+				if let Some((name, value)) = line.split_once(':') {
+					rendered_headers.push(Header {
+						name: name.into(),
+						value: value.trim_start().into(),
+					});
+				}
 			}
-		}
 
-		let mut inner_headers = if let Some(headers) = headers {
-			headers
-		} else {
-			Vec::new()
-		};
-		inner_headers.extend_from_slice(&rendered_headers);
-		headers = Some(inner_headers);
-	}
+			rendered_headers
+		}
+		None => Vec::new(),
+	};
 
 	let url =
 		Url::parse(&handlebars.render_template(&request_config.url, &*context.lock().unwrap())?)?;

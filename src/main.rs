@@ -9,7 +9,7 @@ use structopt::StructOpt;
 
 use upcake::assertions::{AssertionConfig, Equal, RequestAssertionConfig};
 use upcake::reporters::SimpleReporter;
-use upcake::{upcake, Config as UpcakeConfig, RequestConfig, UpcakeResult};
+use upcake::{upcake, Config as UpcakeConfig, HeaderValue, RequestConfig, UpcakeResult};
 
 const UPCAKE_CONFIG_ENV_KEY: &str = "UPCAKE_CONFIG";
 const UPCAKE_CONFIG_DEFAULT_FILE: &str = "Upcakefile.yaml";
@@ -31,7 +31,7 @@ pub struct Config {
 	pub connect_timeout: Option<u64>,
 	/// Set additional variables as YAML. For a file prepend with @
 	#[serde(default)]
-	extra_vars: Option<Mapping>,
+	extra_vars: Mapping,
 	/// Verbose output
 	#[serde(default)]
 	pub verbose: bool,
@@ -65,7 +65,7 @@ struct Opt {
 
 	/// Set additional variables as key=value or YAML. For a file prepend with @
 	#[structopt(name = "EXTRA_VARS", short = "e", long = "extra-vars")]
-	extra_vars: Option<Vec<String>>,
+	extra_vars: Vec<String>,
 
 	/// Verbose output
 	#[structopt(short = "v", long = "verbose")]
@@ -105,7 +105,7 @@ struct Request {
 
 	/// Pass custom header(s) to server. Used in conjunction with --url.
 	#[structopt(short = "H", long = "header")]
-	headers: Option<Vec<Header>>,
+	headers: Vec<Header>,
 
 	/// Verify the response code. Used in conjunction with --url.
 	#[structopt(long = "status-code", default_value = "200")]
@@ -113,7 +113,7 @@ struct Request {
 }
 
 impl Opt {
-	fn merge_with_config(&self, config: &mut Config) {
+	fn merge_with_config(&self, config: &mut Config) -> Result<()> {
 		if let Some(ref env_var_prefix) = self.env_var_prefix {
 			config.env_var_prefix = Some(env_var_prefix.clone());
 		}
@@ -135,6 +135,27 @@ impl Opt {
 		if let Some(max_response_size) = self.max_response_size {
 			config.max_response_size = Some(max_response_size);
 		}
+
+		// Add any extra variables set through the CLI
+		for var in self.extra_vars.iter() {
+			if let Some(path) = var.strip_prefix('@') {
+				// Fetch extra vars stored in a YAML file
+				let yaml = serde_yaml::from_str::<Mapping>(&fs::read_to_string(&path)?)?;
+				for (k, v) in yaml.into_iter() {
+					config.extra_vars.insert(k, v);
+				}
+			} else if let Ok(yaml) = serde_yaml::from_str::<Mapping>(&var) {
+				// Set extra vars from YAML passed in through args
+				for (k, v) in yaml.into_iter() {
+					config.extra_vars.insert(k, v);
+				}
+			} else if let Some((k, v)) = var.split_once('=') {
+				// Set extra vars from key/value pairs passed in through args
+				config.extra_vars.insert(k.into(), v.into());
+			}
+		}
+
+		Ok(())
 	}
 }
 
@@ -160,7 +181,7 @@ fn main() -> Result<()> {
 			requests: vec![RequestConfig {
 				url: url.clone(),
 				request_method: opt.request.request_method.clone(),
-				headers: opt.request.headers.clone(),
+				headers: Some(HeaderValue::List(opt.request.headers.clone())),
 				assertions: vec![AssertionConfig::Equal(RequestAssertionConfig {
 					skip: None,
 					path: Some(".\"response_code\"".into()),
@@ -185,40 +206,16 @@ fn main() -> Result<()> {
 		unreachable!()
 	}
 
-	opt.merge_with_config(&mut config);
+	opt.merge_with_config(&mut config)?;
 
 	let mut context = Mapping::new();
-	if let Some(extra_vars) = config.extra_vars {
-		for (k, v) in extra_vars.iter() {
-			context.insert(k.clone(), v.clone());
-		}
-	}
-
-	// Add any extra variables set through the CLI
-	if let Some(extra_vars) = opt.extra_vars {
-		for var in extra_vars.into_iter() {
-			if let Some(path) = var.strip_prefix('@') {
-				// Fetch extra vars stored in a YAML file
-				let yaml = serde_yaml::from_str::<Mapping>(&fs::read_to_string(&path)?)?;
-				for (k, v) in yaml.into_iter() {
-					context.insert(k, v);
-				}
-			} else if let Ok(yaml) = serde_yaml::from_str::<Mapping>(&var) {
-				// Set extra vars from YAML passed in through args
-				for (k, v) in yaml.into_iter() {
-					context.insert(k, v);
-				}
-			} else if let Some((k, v)) = var.split_once('=') {
-				// Set extra vars from key/value pairs passed in through args
-				context.insert(k.into(), v.into());
-			}
-		}
+	for (k, v) in config.extra_vars.iter() {
+		context.insert(k.clone(), v.clone());
 	}
 
 	// Set the current working dir to be relative to the whatever directory the config file was
 	// loaded from.
 	let current_working_dir = env::current_dir()?;
-	println!("{:?}", config_dir);
 	env::set_current_dir(config_dir)?;
 	for mut request in &mut config.requests {
 		let mut file_data = None;

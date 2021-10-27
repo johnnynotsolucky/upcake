@@ -28,7 +28,7 @@ requests:
   - request_method: "POST"
     requires: ["Request A", "Request B"]
     url: "http://localhost:8888/post"
-    headers_template: |
+    headers: |
       Content-Type: application/json
       Authorization: Bearer {{env.AUTH_TOKEN}}
     data: "@data.hbs"

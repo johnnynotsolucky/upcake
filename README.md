@@ -18,7 +18,7 @@ other, provided that dependency requests are named. Assertions can be against
 request timing data and any response data including headers, content and
 response code.
 
-The request URL, headers, headers_template and content support template rendering with
+The request URL, headers and content support template rendering with
 [Handlebars](https://docs.rs/handlebars/4.1.3/handlebars/index.html) syntax.
 
 Requests are run in parallel except where they have a dependency to another
@@ -107,8 +107,7 @@ requests:
 - `requires` _optional_ - List of named requests this request depends upon.
 - `request_method` _optional_ - The HTTP method to use. Defaults to "GET".
 - `data` _optional_ - Data to send with the request. Send the contents of a file by prefixing the value with an "@", for example "@path/to/body/template.hbs". Relative paths are relative to the directory of the loaded configuration file.
-- `headers`_optional_ - Mapping of headers to be sent.
-- `headers_template` _optional_ - Render raw headers from a template.
+- `headers`_optional_ - Either a list of headers or a template to render raw headers from.
 - `url`- The URL to make the request to.
 - `assertions` _optional_ - A list of assertions to perform on the response. Defaults to a HTTP 200 assertion.
 
@@ -124,17 +123,27 @@ requests:
       value: application/json
     - name: Content-Type
       value: application/json
-  headers_template: |
-    {{#each requests.[Request A].headers}}
-      {{#if (eqi name "Set-Cookie")}}
-    Cookie: {{value}}
-      {{/if}}
-    {{/each}}
   url: "http://localhost:8888/post"
   assertions:
     - type: equal
       path: ."response_code"
       value: 200
+```
+
+##### Header template
+
+```yaml
+- name: "Request B"
+  requires: ["Request A"]
+  request_method: "GET"
+  url: "http://localhost:8888/get"
+  headers: |
+    Accept: application/json
+    {{#each requests.[Request A].headers}}
+      {{#if (eqi name "Set-Cookie")}}
+    Cookie: {{value}}
+      {{/if}}
+    {{/each}}
 ```
 
 ### Assertion configuration

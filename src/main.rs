@@ -144,7 +144,7 @@ impl Opt {
 				for (k, v) in yaml.into_iter() {
 					config.extra_vars.insert(k, v);
 				}
-			} else if let Ok(yaml) = serde_yaml::from_str::<Mapping>(&var) {
+			} else if let Ok(yaml) = serde_yaml::from_str::<Mapping>(var) {
 				// Set extra vars from YAML passed in through args
 				for (k, v) in yaml.into_iter() {
 					config.extra_vars.insert(k, v);

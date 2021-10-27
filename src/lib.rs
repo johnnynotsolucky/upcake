@@ -2,7 +2,7 @@ pub mod assertions;
 pub mod reporters;
 
 use anyhow::Result;
-use handlebars::{handlebars_helper, Handlebars};
+use handlebars::Handlebars;
 use httpstat::{httpstat, Config as HttpstatConfig};
 use httpstat::{Header, StatResult as HttpstatResult, Timing as HttpstatTiming};
 use serde::de::value::SeqAccessDeserializer;
@@ -27,6 +27,13 @@ use reporters::Reporter;
 
 /// Re-export [`serde_yaml::Value`].
 pub use serde_yaml::Value;
+
+mod handlebars_helpers {
+	use handlebars::handlebars_helper;
+
+	handlebars_helper!(eqi: |x: String, y: String| x.to_lowercase() == y.to_lowercase());
+	handlebars_helper!(nei: |x: String, y: String| x.to_lowercase() != y.to_lowercase());
+}
 
 #[derive(Debug, Clone)]
 pub enum HeaderValue {
@@ -578,9 +585,6 @@ where
 	all_ready
 }
 
-handlebars_helper!(eqi: |x: String, y: String| x.to_lowercase() == y.to_lowercase());
-handlebars_helper!(nei: |x: String, y: String| x.to_lowercase() != y.to_lowercase());
-
 /// Run the request
 ///
 /// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
@@ -595,8 +599,8 @@ where
 {
 	// TODO move Handlebars setup out of run_request
 	let mut handlebars = Handlebars::new();
-	handlebars.register_helper("eqi", Box::new(eqi));
-	handlebars.register_helper("nei", Box::new(nei));
+	handlebars.register_helper("eqi", Box::new(handlebars_helpers::eqi));
+	handlebars.register_helper("nei", Box::new(handlebars_helpers::nei));
 
 	// Render header values with the template context
 	let headers = match request_config.headers {

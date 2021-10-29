@@ -610,7 +610,7 @@ impl fmt::Display for Exists {
 #[cfg(test)]
 mod tests {
 	use crate::assertions::*;
-	use anyhow::Result;
+	use anyhow::{anyhow, Result};
 	use serde::Serialize;
 	use serde_yaml::Value;
 
@@ -1524,12 +1524,9 @@ mod tests {
 
 		match assertion_config.assert(&as_value(None as Option<()>))? {
 			AssertionResult::Skip(_, reason) => {
-				assert!(
-					reason == "Skip".to_string(),
-					"skip assertion reason equal \"Skip\""
-				)
+				assert!(reason == *"Skip", "skip assertion reason equal \"Skip\"")
 			}
-			_ => assert!(false, "assertion should return Skip variant result"),
+			_ => return Err(anyhow!("assertion should return Skip variant result")),
 		}
 
 		Ok(())
@@ -1546,11 +1543,15 @@ mod tests {
 		match assertion_config.assert(&as_value(None as Option<()>))? {
 			AssertionResult::FailureOther(_, reason) => {
 				assert!(
-					reason == "Invalid path".to_string(),
+					reason == *"Invalid path",
 					"assertion failure reason equal \"Invalid path\""
 				)
 			}
-			_ => assert!(false, "assertion should return FailureOther variant result"),
+			_ => {
+				return Err(anyhow!(
+					"assertion should return FailureOther variant result"
+				))
+			}
 		}
 
 		Ok(())
@@ -1572,7 +1573,7 @@ mod tests {
 					found
 				)
 			}
-			_ => assert!(false, "assertion should return Failure variant result"),
+			_ => return Err(anyhow!("assertion should return Failure variant result")),
 		}
 
 		Ok(())
@@ -1594,7 +1595,7 @@ mod tests {
 					found
 				)
 			}
-			_ => assert!(false, "assertion should return Success variant result"),
+			_ => return Err(anyhow!("assertion should return Success variant result")),
 		}
 
 		Ok(())

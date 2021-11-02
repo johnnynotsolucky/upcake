@@ -14,5 +14,4 @@ services:
       - 8888:80
 
 volumes:
-  caddy_data:
   caddy_config:

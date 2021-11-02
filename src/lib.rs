@@ -11,14 +11,13 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fmt::{self, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-use std::str;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
+use std::{env, fs, str};
 use thiserror::Error;
 use url::Url;
 
@@ -83,6 +82,15 @@ impl<'de> Deserialize<'de> for HeaderValue {
 	}
 }
 
+/// The representation of the data to send with the request
+#[derive(Deserialize, Debug, Clone)]
+pub enum RequestData {
+	/// A string containing template data
+	StringValue(String),
+	/// A file to be read and rendered when the request is executed
+	FilePath(String),
+}
+
 /// Configuration for individual requests
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -99,7 +107,8 @@ pub struct RequestConfig {
 	/// Send the contents of a file by prefixing with an @: `"@/path/to/file.json"`
 	///
 	/// Contents are rendered with [`mod@handlebars`].
-	pub data: Option<String>,
+	#[serde(deserialize_with = "request_data")]
+	pub data: Option<RequestData>,
 	/// Headers to pass to the request
 	pub headers: Option<HeaderValue>,
 	/// The url to request
@@ -144,6 +153,24 @@ where
 	Ok(None)
 }
 
+/// Set the field to a FilePath if the value is prefixed with @, otherwise use StringValue
+pub(crate) fn request_data<'de, D>(deserializer: D) -> Result<Option<RequestData>, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let result: Result<Option<String>, _> = Option::deserialize(deserializer);
+
+	if let Ok(Some(value)) = result {
+		if let Some(path) = value.strip_prefix('@') {
+			return Ok(Some(RequestData::FilePath(path.into())));
+		} else {
+			return Ok(Some(RequestData::StringValue(value)));
+		}
+	}
+
+	Ok(None)
+}
+
 /// Configuration applied to all requests
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct Config {
@@ -153,6 +180,12 @@ pub struct Config {
 	pub location: bool,
 	/// Allow insecure server connections when using SSL
 	pub insecure: bool,
+	/// Client certificate file
+	pub client_cert: Option<String>,
+	/// Private key file
+	pub client_key: Option<String>,
+	/// CA certificate to verify against
+	pub ca_cert: Option<String>,
 	/// Maximum time allowed for connection
 	pub connect_timeout: Option<u64>,
 	/// Verbose output
@@ -640,13 +673,23 @@ where
 		Url::parse(&handlebars.render_template(&request_config.url, &*context.lock().unwrap())?)?;
 
 	let data = match request_config.data {
-		Some(ref data) => Some(handlebars.render_template(data, &*context.lock().unwrap())?),
+		Some(RequestData::StringValue(ref data)) => {
+			Some(handlebars.render_template(data, &*context.lock().unwrap())?)
+		}
+		Some(RequestData::FilePath(ref path)) => Some(
+			handlebars.render_template(&fs::read_to_string(path)?, &*context.lock().unwrap())?,
+		),
 		None => None,
 	};
+
+	let fail_request = config.fail_request;
 
 	let httpstat_config = HttpstatConfig {
 		location: config.location,
 		insecure: config.insecure,
+		client_cert: config.client_cert.clone(),
+		client_key: config.client_key.clone(),
+		ca_cert: config.ca_cert.clone(),
 		verbose: config.verbose,
 		connect_timeout: config.connect_timeout.map(Duration::from_millis),
 		max_response_size: config.max_response_size,
@@ -659,7 +702,7 @@ where
 
 	match httpstat(&httpstat_config).await {
 		Ok(httpstat_result) => {
-			if config.fail_request && (400..600).contains(&httpstat_result.response_code) {
+			if fail_request && (400..600).contains(&httpstat_result.response_code) {
 				Err(Error::RequestError(
 					request_config,
 					format!("HTTP {}", httpstat_result.response_code),

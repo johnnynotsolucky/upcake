@@ -19,7 +19,8 @@ request timing data and any response data including headers, content and
 response code.
 
 The request URL, headers and content support template rendering with
-[Handlebars](https://docs.rs/handlebars/4.1.3/handlebars/index.html) syntax.
+[Handlebars](https://handlebarsjs.com/) using the
+[handlebars](https://docs.rs/handlebars/*/handlebars/) crate.
 
 Requests are run in parallel except where they have a dependency to another
 request in which case they will wait until their dependencies have completed
@@ -51,6 +52,9 @@ cargo install --path .
 - `--env-var-prefix` - An optional prefix to filter environment variables
   injected into the template context
 - `-k`, `--insecure` - Allow insecure server connections when using SSL
+- `-E`, `--cert` - Client certificate file
+- `--key` - Client private key file
+- `--cacert` - CA certificate to verify against
 - `-L`, `--location` - Follow redirects
 - `-v`, `--verbose` - Verbose output
 - `--fail-request` - Fail request on HTTP error response codes
@@ -59,24 +63,24 @@ cargo install --path .
   file, prepend the value with "@". Available in the template context in the `user` property.
 - `--connect-timeout` - Maximum time allowed for connection in milliseconds
 - `-c`, `--config-file` - Path to the request config file. Defaults to
-  "Upcakefile.yaml". Required if `--url` is not set.
-- `-u`, `--url` - Run default assertions against a URL. Will use the default
-  request config. Required if `--config-file` is not set.
-- `-X`, `--request-method` - Specify request method to use. Used in conjunction
-  with `--url`. Defaults to "GET".
-- `-H`, `--header` - Pass custom headers to server. Used in conjunction with
-  `--url`.
-- `--status-code` - Verify the response code. Used in conjunction with `--url`.
-  Defaults to 200.
+  "Upcakefile.yaml".
 
 **Note:** Configuration set from the command line will override configuration for that
 property set in the Upcakefile.
 
 ### Configuration
 
+- `env_var_prefix` - An optional prefix to filter environment variables.
+  Overridden by `--env-var-prefix`.
 - `location` - Follow redirects. Overridden by `--insecure`.
 - `insecure` - Allow insecure server connections when using SSL. Overridden by
   `--insecure`.
+- `client_cert` - Client certificate file. Overridden by `--cert`. Unless
+  absolute, path is relative to the directory of the config file.
+- `client_key` - Client private key file. Overridden by `--key`. Unless
+  absolute, path is relative to the directory of the config file.
+- `ca_cert` - CA certificate to verify against. Overridden by `--cacert`. Unless
+  absolute, path is relative to the directory of the config file.
 - `connect_timeout` - Maximum time allowed for connection. Overridden by
   `--connect-timeout`.
 - `extra_vars` - Set additional variables from YAML mapping. Merged with vars
@@ -92,6 +96,9 @@ property set in the Upcakefile.
 ```yaml
 location: false
 insecure: false
+ca_cert: ca.pem
+client_cert: client.pem
+client_key: key.pem
 connect_timeout: 100
 extra_vars:
   my_var: Some Value
@@ -399,7 +406,36 @@ request ended.
 - `server_processing` - Difference of `starttransfer` and `pretransfer`.
 - `content_transfer` - Difference of `total` and `starttransfer`.
 
-### Handlebars
+### Templating
+
+The request URL, headers and content support template rendering with
+[Handlebars](https://handlebarsjs.com/) using the
+[handlebars](https://docs.rs/handlebars/*/handlebars/) crate.
+
+The response headers and content of a request is made available as part of the
+template context for dependent requests.
+
+#### Available elements
+
+##### `user`
+
+Optional user-provided context. This is set via the
+[`--extra-vars`](#command-line-options) flag and/or with the
+[`extra_vars`](#configuration) configuration property in the config file.
+
+##### `env`
+
+A map of the environment variables available to the program at runtime. Setting
+a prefix with [`--env-var-prefix`](#command-line-options) or the
+[`env_var_prefix`](#configuration) config option will remove any environment
+variables which are not prefixed with that value.
+
+##### `requests`
+
+A map of requests keyed by request name. Only requests which are set in the
+[`requires`](#request-configuration) property of the request configuration are
+included. Requests which have not yet executed or completed will not be
+available until they have completed.
 
 #### Helpers
 
@@ -433,49 +469,6 @@ docker-compose --file examples/docker-compose.yaml up
 
 ```bash
 upcake --config-file examples/basic.yaml
-```
-
-### Command-line examples
-
-#### Inline POST request
-
-```bash
-upcake --url http://localhost:8888/post -X POST
-```
-
-#### Inline request with custom header
-
-```bash
-upcake --url http://localhost:8888/get -H "X-My-Token: token"
-```
-
-#### Inline request with environment variable
-
-```bash
-MY_TOKEN=token upcake --url http://localhost:8888/get -H "X-My-Token: {{env.MY_TOKEN}}"
-```
-
-#### Validate inline request status code
-
-```bash
-upcake --url http://localhost:8888/post -X PATCH --status-code 405
-```
-
-#### Dependencies example with AUTH_TOKEN
-
-```bash
 AUTH_TOKEN=my_token upcake --config-file ./examples/pipeline.yaml
-```
-
-#### Validation failure
-
-```bash
-upcake --url http://localhost:8888/post -X PATCH
-echo $?
-```
-
-#### Verbose output (libcurl)
-
-```bash
-upcake --url http://localhost:8888/get --verbose
+upcake --config-file examples/mtls.yaml
 ```

@@ -1,0 +1,8 @@
+---
+ca_cert: caddy/ca.pem
+client_cert: client.pem
+client_key: client-key.pem
+
+requests:
+  - url: "https://localhost:4443/get"
+

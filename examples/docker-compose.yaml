@@ -1,6 +1,18 @@
 version: '3'
 services:
-  httpbin:
-    image: 'kennethreitz/httpbin'
+  caddy:
+    image: caddy:latest
     ports:
-      - '8888:80'
+      - 4443:443
+    volumes:
+      - ./caddy:/etc/caddy
+      - caddy_config:/config
+
+  httpbin:
+    image: kennethreitz/httpbin:latest
+    ports:
+      - 8888:80
+
+volumes:
+  caddy_data:
+  caddy_config:

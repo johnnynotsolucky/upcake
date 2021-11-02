@@ -11,5 +11,3 @@ cargo clippy --all-features -- \
   -D clippy::dbg_macro
 
 cargo test
-
-

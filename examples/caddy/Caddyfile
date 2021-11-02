@@ -1,0 +1,10 @@
+localhost
+
+reverse_proxy httpbin:80
+
+tls /etc/caddy/cert.pem /etc/caddy/key.pem {
+  client_auth {
+    mode require_and_verify
+    trusted_ca_cert_file /etc/caddy/ca.pem
+  }
+}

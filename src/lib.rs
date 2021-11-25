@@ -1,4 +1,5 @@
 pub mod assertions;
+pub mod observer;
 pub mod reporters;
 
 use anyhow::Result;
@@ -23,6 +24,8 @@ use url::Url;
 
 use assertions::{AssertionConfig, AssertionResult, Equal, RequestAssertionConfig};
 use reporters::Reporter;
+
+use observer::{Event, Observer, RequestState as ObserverRequestState};
 
 /// Re-export [`serde_yaml::Value`].
 pub use serde_yaml::Value;
@@ -303,11 +306,11 @@ impl From<HttpstatResult> for StatResult {
 #[derive(Debug, Clone)]
 pub struct ResponseData {
 	/// Wrapped [`StatResult`]
-	inner: Arc<StatResult>,
+	inner: StatResult,
 }
 
-impl From<Arc<StatResult>> for ResponseData {
-	fn from(result: Arc<StatResult>) -> Self {
+impl From<StatResult> for ResponseData {
+	fn from(result: StatResult) -> Self {
 		Self { inner: result }
 	}
 }
@@ -325,116 +328,48 @@ impl Serialize for ResponseData {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+enum RequestError {
 	/// Request failed
-	#[error("Request failed: {1:?}")]
-	RequestError(Arc<RequestConfig>, String),
-	/// Dependencies for a request failed, possibly with [`Error::RequestError`]
-	#[error("Request dependencies failed: {1:?}")]
-	DependencyError(Arc<RequestConfig>, String),
+	#[error("Request failed: {0:?}")]
+	RequestError(String),
+	/// Dependencies for a request failed, possibly with [`RequestError::RequestError`]
+	#[error("Request dependencies failed: {0:?}")]
+	DependencyError(String),
 }
 
-enum State<F>
+enum FutureState<F>
 where
 	F: Future<Output = RequestResult>,
 {
-	/// Request configuration for requests which haven't started running yet
-	Wait(Arc<RequestConfig>),
+	/// Request hasn't started yet
+	Wait,
 	/// The request future for running requests
 	Future(F),
 	/// Request has completed
-	///
-	/// Boxed so that allocation for [`State`] is not oversized just for this variant.
 	Done(Box<RequestResult>),
 }
 
+/// An enum used for identifying requests in a map
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-enum StateKey {
+pub enum RequestKey {
 	Name(String),
 	Idx(usize),
 }
 
-type RequestResult = Result<(Arc<RequestConfig>, Arc<StatResult>)>;
-type RequestState = State<Pin<Box<dyn Future<Output = RequestResult>>>>;
+type RequestStateMap = HashMap<RequestKey, RequestState>;
+type RequestConfigMap = HashMap<RequestKey, RequestConfig>;
+type RequestResult = Result<StatResult>;
+type RequestState = FutureState<Pin<Box<dyn Future<Output = RequestResult>>>>;
 
-// TODO This future is not nice. Please make it nice.
-struct RequestsFuture<C>
-where
-	C: Serialize,
-{
-	config: Arc<Config>,
-	context: Arc<Mutex<TemplateContext<C>>>,
-	states: HashMap<StateKey, RequestState>,
+struct RequestsFuture {
+	poll_fn: Box<dyn FnMut(&mut Context<'_>) -> Poll<Result<()>>>,
 }
 
-impl<C> RequestsFuture<C>
-where
-	C: Serialize,
-{
-	fn new(mut config: Config, context: Option<C>) -> Self {
-		let mut request_config_map = HashMap::new();
+impl Future for RequestsFuture {
+	type Output = Result<()>;
 
-		let requests = std::mem::take(&mut config.requests);
-		// Move requests into a map with the request names as keys, or if the name is not set, the
-		// string representation of the request's index in the iterator.
-		for (idx, request_config) in requests.into_iter().enumerate() {
-			let state_key = match request_config.name {
-				Some(ref key) => StateKey::Name(key.clone()),
-				None => StateKey::Idx(idx),
-			};
-			request_config_map.insert(state_key, State::Wait(Arc::new(request_config)));
-		}
-
-		let envvars = env::vars()
-			.filter(|(key, _value)| match config.env_var_prefix {
-				Some(ref env_var_prefix) => key.starts_with(env_var_prefix),
-				None => true,
-			})
-			.collect();
-
-		Self {
-			// Set up the template context to include the optional user context, environment variables
-			// and an empty map of requests.
-			context: Arc::new(Mutex::new(TemplateContext {
-				user: context,
-				env: envvars,
-				requests: HashMap::new(),
-			})),
-			config: Arc::new(config),
-			states: request_config_map,
-		}
-	}
-}
-
-impl<C> Future for RequestsFuture<C>
-where
-	C: Serialize + 'static,
-{
-	type Output = Result<Vec<RequestResult>>;
-
-	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-		let mut this = unsafe { self.get_unchecked_mut() };
-
-		// Mark states which are ready to be polled.
-		mark_ready_states(&mut this);
-
-		// When all the states are the Ready variant, the results can be mapped to a list
-		if poll_states(&mut this, context) {
-			// We don't need states anymore, shadow the variable and map into the result Vec.
-			let states = std::mem::take(&mut this.states);
-			let results = states
-				.into_values()
-				.map(|state| match state {
-					State::Done(result) => *result,
-					_ => unreachable!(),
-				})
-				.collect();
-
-			Poll::Ready(Ok(results))
-		} else {
-			context.waker().wake_by_ref();
-			Poll::Pending
-		}
+	fn poll(self: Pin<&mut Self>, mut context: &mut Context<'_>) -> Poll<Self::Output> {
+		(self.get_mut().poll_fn)(&mut context)
 	}
 }
 
@@ -445,14 +380,13 @@ enum RequirementState {
 	Error,
 }
 
-impl<F> From<&State<F>> for RequirementState
+impl<F> From<&FutureState<F>> for RequirementState
 where
 	F: Future<Output = RequestResult>,
 {
-	fn from(state: &State<F>) -> Self {
+	fn from(state: &FutureState<F>) -> Self {
 		match state {
-			// result is a reference to a Box
-			State::Done(result) => match **result {
+			FutureState::Done(result) => match **result {
 				Ok(_) => Self::Success,
 				Err(_) => Self::Error,
 			},
@@ -462,11 +396,14 @@ where
 }
 
 /// Iterate over request states and check whether each waiting state should be marked as running.
-fn mark_ready_states<C>(requests_future: &mut RequestsFuture<C>)
+///
+/// Returns a list of RequestKey's for requests which were moved into Done(Err) state.
+fn mark_ready_states<C>(internal_state: Arc<Mutex<State<C>>>) -> Vec<RequestKey>
 where
-	C: Serialize + 'static,
+	C: Serialize + Clone + 'static,
 {
-	let states = &mut requests_future.states;
+	let internal_state = &mut *internal_state.lock().unwrap();
+
 	// Create sets of errored and successful requests to match against request dependencies
 	// when checking whether a request can be started.
 	//
@@ -476,10 +413,11 @@ where
 	// compile.
 	//
 	// Only named requests are included.
-	let all_map: HashMap<String, RequirementState> = states
+	let all_map: HashMap<String, RequirementState> = internal_state
+		.request_states
 		.iter()
-		.filter_map(|(ref state_key, state)| match state_key {
-			StateKey::Name(key) => Some((key.clone(), RequirementState::from(state))),
+		.filter_map(|(ref request_key, state)| match request_key {
+			RequestKey::Name(key) => Some((key.clone(), RequirementState::from(state))),
 			_ => None,
 		})
 		.collect();
@@ -499,8 +437,11 @@ where
 		};
 	}
 
-	for (state_key, state) in states.iter_mut() {
-		if let State::Wait(request_config) = state {
+	let mut dependency_error_keys = Vec::new();
+
+	for (request_key, state) in internal_state.request_states.iter_mut() {
+		if let FutureState::Wait = state {
+			let request_config = internal_state.request_map.get(request_key).unwrap();
 			let requirements_validated = if !request_config.requires.is_empty() {
 				// If the request has requirements, ensure that they all exist otherwise it will
 				// never leave the Wait state.
@@ -510,8 +451,8 @@ where
 					.all(|r| all_map.keys().any(|key| r == key));
 
 				// If the request requires itself, it will sit in Wait indefinitely.
-				let requires_self = request_config.requires.iter().any(|r| match state_key {
-					StateKey::Name(ref key) => r == key,
+				let requires_self = request_config.requires.iter().any(|r| match request_key {
+					RequestKey::Name(ref key) => r == key,
 					_ => false,
 				});
 
@@ -534,8 +475,7 @@ where
 
 				if !error_intersection.is_empty() {
 					// Update this requests state so that it is Done and skips polling.
-					*state = State::Done(Box::new(Err(Error::DependencyError(
-						request_config.clone(),
+					*state = FutureState::Done(Box::new(Err(RequestError::DependencyError(
 						// Non-exhaustive list of dependencies which failed before attempting to
 						// start this request.
 						error_intersection
@@ -545,58 +485,69 @@ where
 							.join(", "),
 					)
 					.into())));
+					dependency_error_keys.push(request_key.clone());
 				} else if success_intersection.len() == requires_set.len() {
 					// This request is ready to start, update this requests state so that it can be
 					// polled.
-					*state = State::Future(Box::pin(run_request(
-						requests_future.config.clone(),
+					let future = run_request(
+						internal_state.config.clone(),
 						request_config.clone(),
-						requests_future.context.clone(),
-					)));
+						internal_state.template_context.clone(),
+					);
+					*state = FutureState::Future(Box::pin(future));
 				}
 			} else {
-				*state = State::Done(Box::new(Err(Error::DependencyError(
-					request_config.clone(),
+				*state = FutureState::Done(Box::new(Err(RequestError::DependencyError(
 					"Invalid requirements".into(),
 				)
 				.into())));
+				dependency_error_keys.push(request_key.clone());
 			}
 		}
 	}
+
+	dependency_error_keys
 }
 
 /// Iterate over running futures and update their states if they're done.
 ///
 /// Returns true if all states are done
-fn poll_states<C>(requests_future: &mut RequestsFuture<C>, context: &mut Context<'_>) -> bool
+fn poll_states<C>(
+	internal_state: Arc<Mutex<State<C>>>,
+	task_context: &mut Context<'_>,
+) -> (bool, Vec<RequestKey>)
 where
-	C: Serialize + 'static,
+	C: Serialize + Clone,
 {
-	let states = &mut requests_future.states;
+	let mut new_done_keys: Vec<RequestKey> = Vec::new();
+
 	let mut all_ready = true;
 
-	for (state_key, state) in states.iter_mut() {
+	let internal_state = &mut *internal_state.lock().unwrap();
+	for (request_key, state) in internal_state.request_states.iter_mut() {
 		match state {
-			State::Future(future) => {
+			FutureState::Future(future) => {
 				// This future can be polled
-				match Pin::new(future).poll(context) {
+				match Pin::new(future).poll(task_context) {
 					// If it is Ready, mark it's state as Done
 					Poll::Ready(result) => {
-						let result = Box::new(result);
+						let result = result;
 
 						// If there is an Ok result from the request future, add that to the
 						// TemplateContext under the name of the request.
-						if let Ok((_, ref stat_result)) = *result {
+						if let Ok(ref stat_result) = result {
 							// Only named requests get added to the context
-							if let StateKey::Name(name) = state_key {
-								let mut context = requests_future.context.lock().unwrap();
-								context
+							if let RequestKey::Name(name) = request_key {
+								let template_context = &mut internal_state.template_context;
+								template_context
 									.requests
 									.insert(name.clone(), ResponseData::from(stat_result.clone()));
 							}
 						}
 
-						*state = State::Done(result);
+						*state = FutureState::Done(Box::new(result));
+
+						new_done_keys.push(request_key.clone());
 					}
 					Poll::Pending => {
 						// If the request has started, but is still pending, mark the future
@@ -606,16 +557,16 @@ where
 					}
 				}
 			}
-			State::Wait(_) => {
+			FutureState::Wait => {
 				// If the request is still waiting to start, mark the future as incomplete.
 				all_ready = false;
 				continue;
 			}
-			State::Done(_) => continue, // Ignore Done, there's no further work needed.
+			FutureState::Done(_) => continue, // Ignore Done, there's no further work needed.
 		}
 	}
 
-	all_ready
+	(all_ready, new_done_keys)
 }
 
 /// Run the request
@@ -623,18 +574,19 @@ where
 /// Handles set up of request configuration to call [`mod@httpstat()`] with and handle rendering of templated request
 /// data.
 async fn run_request<C>(
-	config: Arc<Config>,
-	request_config: Arc<RequestConfig>,
-	context: Arc<Mutex<TemplateContext<C>>>,
+	config: Config,
+	request_config: RequestConfig,
+	template_context: TemplateContext<C>,
 ) -> RequestResult
 where
-	C: Serialize,
+	C: Serialize + Clone,
 {
 	// TODO move Handlebars setup out of run_request
 	let mut handlebars = Handlebars::new();
 	handlebars.register_helper("eqi", Box::new(handlebars_helpers::eqi));
 	handlebars.register_helper("nei", Box::new(handlebars_helpers::nei));
 
+	let template_context = template_context;
 	// Render header values with the template context
 	let headers = match request_config.headers {
 		Some(HeaderValue::List(ref headers)) => {
@@ -644,15 +596,14 @@ where
 			for header in headers {
 				rendered_headers.push(Header {
 					name: header.name.clone(),
-					value: handlebars.render_template(&header.value, &*context.lock().unwrap())?,
+					value: handlebars.render_template(&header.value, &template_context)?,
 				});
 			}
 
 			rendered_headers
 		}
 		Some(HeaderValue::Template(ref template)) => {
-			let rendered_template =
-				handlebars.render_template(template, &*context.lock().unwrap())?;
+			let rendered_template = handlebars.render_template(template, &template_context)?;
 
 			let mut rendered_headers = Vec::new();
 			for line in rendered_template.lines() {
@@ -669,18 +620,19 @@ where
 		None => Vec::new(),
 	};
 
-	let url =
-		Url::parse(&handlebars.render_template(&request_config.url, &*context.lock().unwrap())?)?;
+	let url = Url::parse(&handlebars.render_template(&request_config.url, &template_context)?)?;
 
 	let data = match request_config.data {
 		Some(RequestData::StringValue(ref data)) => {
-			Some(handlebars.render_template(data, &*context.lock().unwrap())?)
+			Some(handlebars.render_template(data, &template_context)?)
 		}
-		Some(RequestData::FilePath(ref path)) => Some(
-			handlebars.render_template(&fs::read_to_string(path)?, &*context.lock().unwrap())?,
-		),
+		Some(RequestData::FilePath(ref path)) => {
+			Some(handlebars.render_template(&fs::read_to_string(path)?, &template_context)?)
+		}
 		None => None,
 	};
+
+	drop(template_context);
 
 	let fail_request = config.fail_request;
 
@@ -703,16 +655,15 @@ where
 	match httpstat(&httpstat_config).await {
 		Ok(httpstat_result) => {
 			if fail_request && (400..600).contains(&httpstat_result.response_code) {
-				Err(Error::RequestError(
-					request_config,
-					format!("HTTP {}", httpstat_result.response_code),
+				Err(
+					RequestError::RequestError(format!("HTTP {}", httpstat_result.response_code))
+						.into(),
 				)
-				.into())
 			} else {
-				Ok((request_config, Arc::new(httpstat_result.into())))
+				Ok(httpstat_result.into())
 			}
 		}
-		Err(error) => Err(Error::RequestError(request_config, error.to_string()).into()),
+		Err(error) => Err(RequestError::RequestError(error.to_string()).into()),
 	}
 }
 
@@ -720,7 +671,7 @@ where
 #[derive(Serialize, Debug, Clone)]
 struct TemplateContext<C>
 where
-	C: Serialize,
+	C: Serialize + Clone,
 {
 	/// Optional user context
 	user: Option<C>,
@@ -740,71 +691,252 @@ pub enum UpcakeResult {
 	Failures(usize),
 }
 
+pub struct State<C>
+where
+	C: Serialize + Clone,
+{
+	config: Config,
+	request_states: RequestStateMap,
+	request_map: RequestConfigMap,
+	template_context: TemplateContext<C>,
+	failure_count: usize,
+}
+
 /// TODO Add docs please
 ///
 /// Returns
 pub async fn upcake<C, R>(
-	config: Config,
+	mut config: Config,
 	context: Option<C>,
-	reporter: &mut R,
+	_reporter: &mut R,
+	mut observer: Box<dyn Observer<C>>,
 ) -> Result<UpcakeResult>
 where
-	C: Serialize + 'static,
+	C: Serialize + Clone + 'static,
 	R: Reporter,
 {
-	reporter.start();
+	let mut request_states: RequestStateMap = HashMap::new();
+	let mut request_map: RequestConfigMap = HashMap::new();
 
-	let results = RequestsFuture::new(config, context).await?;
+	let requests = std::mem::take(&mut config.requests);
+	// Move requests into a map with the request names as keys, or if the name is not set, the
+	// string representation of the request's index in the iterator.
+	for (idx, request_config) in requests.into_iter().enumerate() {
+		let request_key = match request_config.name {
+			Some(ref key) => RequestKey::Name(key.clone()),
+			None => RequestKey::Idx(idx),
+		};
+		request_states.insert(request_key.clone(), FutureState::Wait);
+		request_map.insert(request_key, request_config);
+	}
 
-	let mut failure_count = 0;
+	let envvars = env::vars()
+		.filter(|(key, _value)| match config.env_var_prefix {
+			Some(ref env_var_prefix) => key.starts_with(env_var_prefix),
+			None => true,
+		})
+		.collect();
 
-	for result in results {
-		match result {
-			Ok((request_config, stat_result)) => {
-				reporter.step_suite(&request_config);
-				let result = serde_yaml::to_value(&*stat_result)?;
+	let template_context = TemplateContext {
+		user: context,
+		env: envvars,
+		requests: Default::default(),
+	};
 
-				for assertion in request_config.assertions.iter() {
-					let assertion_result = assertion.assert(&result)?;
+	let internal_state = Arc::new(Mutex::new(State {
+		config,
+		request_states,
+		request_map,
+		template_context,
+		failure_count: 0,
+	}));
 
-					// If there is any type of failure, increment the failure_count.
-					match assertion_result {
-						AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
-							failure_count += 1;
-						}
-						_ => {}
+	observer.setup(&*internal_state.lock().unwrap());
+
+	// Get a new reference to internal_state so that it can be used inside poll.
+	let poll_state = internal_state.clone();
+	let poll = move |context: &mut Context<'_>| -> Poll<Result<()>> {
+		// Mark states which are ready to be polled.
+		let dependency_error_keys = mark_ready_states(poll_state.clone());
+		if !dependency_error_keys.is_empty() {
+			let internal_state = &mut *poll_state.lock().unwrap();
+			for key in dependency_error_keys {
+				if let Some(FutureState::Done(result)) = internal_state.request_states.get(&key) {
+					if let Err(ref error) = **result {
+						internal_state.failure_count += 1;
+						observer.on_notify(
+							&key,
+							Event::AssertionResultAdded(&AssertionResult::FailureOther(
+								None,
+								error.to_string(),
+							)),
+						);
 					}
-
-					reporter.step_result(assertion_result);
+				} else {
+					unreachable!();
 				}
 			}
-			Err(error) => {
-				// Request errors count towards failure counts.
-				failure_count += 1;
-				match error.downcast_ref::<Error>() {
-					Some(error) => {
-						let request_config = match error {
-							Error::RequestError(request_config, _) => request_config,
-							Error::DependencyError(request_config, _) => request_config,
-						};
-						reporter.step_suite(request_config);
-						reporter
-							.step_result(AssertionResult::FailureOther(None, error.to_string()));
+		}
+
+		// When all the states are the Ready variant, the results can be mapped to a list
+		let (all_ready, done_keys) = poll_states(poll_state.clone(), context);
+
+		// If some requests have completed, run assertions against their results
+		if !done_keys.is_empty() {
+			let internal_state = &mut *poll_state.lock().unwrap();
+
+			for key in done_keys {
+				// If this key actually exists.
+				if let Some(FutureState::Done(result)) = internal_state.request_states.get(&key) {
+					match **result {
+						Ok(ref stat_result) => {
+							observer.on_notify(
+								&key,
+								Event::RequestStateChanged(ObserverRequestState::Success(
+									stat_result,
+								)),
+							);
+							let request_config = internal_state.request_map.get(&key).unwrap();
+							// reporter.step_suite(&request_config)?;
+							let result = serde_yaml::to_value(&stat_result)?;
+
+							for assertion in request_config.assertions.iter() {
+								let assertion_result = assertion.assert(&result)?;
+								observer.on_notify(
+									&key,
+									Event::AssertionResultAdded(&assertion_result),
+								);
+
+								// If there is any type of failure, increment the failure_count.
+								match assertion_result {
+									AssertionResult::Failure(_, _)
+									| AssertionResult::FailureOther(_, _) => {
+										internal_state.failure_count += 1;
+									}
+									_ => {
+										println!("Done");
+									}
+								}
+
+								// reporter.step_result(assertion_result)?;
+								// reporter.update(&key, Update::AssertionResult, assertion_result);
+							}
+						}
+						Err(ref error) => {
+							// Request errors count towards failure counts.
+							internal_state.failure_count += 1;
+							match error.downcast_ref::<RequestError>() {
+								Some(error) => {
+									observer.on_notify(
+										&key,
+										Event::AssertionResultAdded(
+											&AssertionResult::FailureOther(None, error.to_string()),
+										),
+									);
+								}
+								None => {
+									observer.on_notify(
+										&key,
+										Event::RequestStateChanged(ObserverRequestState::Error(
+											error,
+										)),
+									);
+									// TODO
+									println!("None");
+									// reporter.step_result(AssertionResult::FailureOther(
+									//     None,
+									//     format!("{}", error),
+									// ))?;
+									// TODO maybe enum with update types
+									// reporter.update(&key, Update::AssertionResult(AssertionResult::FailureOther(
+									//     None,
+									//     format!("{}", error),
+									// )));
+								}
+							};
+						}
 					}
-					None => {
-						reporter
-							.step_result(AssertionResult::FailureOther(None, format!("{}", error)));
-					}
-				};
+				} else {
+					unreachable!();
+				}
 			}
 		}
+
+		if all_ready {
+			Poll::Ready(Ok(()))
+		} else {
+			context.waker().wake_by_ref();
+			Poll::Pending
+		}
+	};
+
+	RequestsFuture {
+		poll_fn: Box::new(poll),
 	}
+	.await?;
 
-	reporter.end();
-
-	if failure_count == 0 {
+	let internal_state = &*internal_state.lock().unwrap();
+	if internal_state.failure_count == 0 {
 		Ok(UpcakeResult::Success)
 	} else {
-		Ok(UpcakeResult::Failures(failure_count))
+		Ok(UpcakeResult::Failures(internal_state.failure_count))
 	}
+
+	// reporter.start()?;
+	//
+	// let results = RequestsFuture::new(config, context).await?;
+	//
+	// let mut failure_count = 0;
+	//
+	// for result in results {
+	// 	match result {
+	// 		Ok((request_config, stat_result)) => {
+	// 			reporter.step_suite(&request_config)?;
+	// 			let result = serde_yaml::to_value(&*stat_result)?;
+	//
+	// 			for assertion in request_config.assertions.iter() {
+	// 				let assertion_result = assertion.assert(&result)?;
+	//
+	// 				// If there is any type of failure, increment the failure_count.
+	// 				match assertion_result {
+	// 					AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
+	// 						failure_count += 1;
+	// 					}
+	// 					_ => {}
+	// 				}
+	//
+	// 				reporter.step_result(assertion_result)?;
+	// 			}
+	// 		}
+	// 		Err(error) => {
+	// 			// Request errors count towards failure counts.
+	// 			failure_count += 1;
+	// 			match error.downcast_ref::<Error>() {
+	// 				Some(error) => {
+	// 					let request_config = match error {
+	// 						Error::RequestError(request_config, _) => request_config,
+	// 						Error::DependencyError(request_config, _) => request_config,
+	// 					};
+	// 					reporter.step_suite(request_config)?;
+	// 					reporter
+	// 						.step_result(AssertionResult::FailureOther(None, error.to_string()))?;
+	// 				}
+	// 				None => {
+	// 					reporter.step_result(AssertionResult::FailureOther(
+	// 						None,
+	// 						format!("{}", error),
+	// 					))?;
+	// 				}
+	// 			};
+	// 		}
+	// 	}
+	// }
+	//
+	// reporter.end()?;
+	//
+	// if failure_count == 0 {
+	// 	Ok(UpcakeResult::Success)
+	// } else {
+	// 	Ok(UpcakeResult::Failures(failure_count))
+	// }
 }

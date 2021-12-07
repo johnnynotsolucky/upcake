@@ -6,8 +6,7 @@ use std::path::{self, PathBuf};
 use std::{env, fs, process};
 use structopt::StructOpt;
 
-use upcake::observer::NoopObserver;
-use upcake::reporters::NoopReporter;
+use upcake::observer::write::WriteObserver;
 use upcake::{upcake, Config as UpcakeConfig, RequestConfig, RequestData, UpcakeResult};
 
 /// Returns a value of $path scoped to $base_path.
@@ -231,14 +230,8 @@ fn main() -> Result<()> {
 		}
 	}
 
-	let mut reporter = NoopReporter;
-	let observer = Box::new(NoopObserver);
-	let res = block_on(upcake(
-		config.into(),
-		Some(context),
-		&mut reporter,
-		observer,
-	))?;
+	let observer = Box::new(WriteObserver::default());
+	let res = block_on(upcake(config.into(), Some(context), observer))?;
 
 	if let UpcakeResult::Failures(failure_count) = res {
 		process::exit(failure_count as i32);

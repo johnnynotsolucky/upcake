@@ -1,7 +1,11 @@
 use crate::assertions::AssertionResult;
 use crate::{RequestKey, StatResult, State};
 use anyhow::Error;
+use anyhow::Result;
 use serde::Serialize;
+
+pub mod noop;
+pub mod write;
 
 #[derive(Debug)]
 pub enum Event<'a> {
@@ -26,18 +30,5 @@ where
 	C: Serialize + Clone,
 {
 	fn setup(&mut self, state: &State<C>);
-	fn on_notify(&mut self, key: &RequestKey, event: Event);
-}
-
-pub struct NoopObserver;
-
-impl<C> Observer<C> for NoopObserver
-where
-	C: Serialize + Clone,
-{
-	fn setup(&mut self, _state: &State<C>) {}
-
-	fn on_notify(&mut self, key: &RequestKey, event: Event) {
-		println!("{:?}: {:#?}", key, event);
-	}
+	fn on_notify(&mut self, key: &RequestKey, event: Event) -> Result<()>;
 }

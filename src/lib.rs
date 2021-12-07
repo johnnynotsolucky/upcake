@@ -1,6 +1,5 @@
 pub mod assertions;
 pub mod observer;
-pub mod reporters;
 
 use anyhow::Result;
 use handlebars::Handlebars;
@@ -23,7 +22,6 @@ use thiserror::Error;
 use url::Url;
 
 use assertions::{AssertionConfig, AssertionResult, Equal, RequestAssertionConfig};
-use reporters::Reporter;
 
 use observer::{Event, Observer, RequestState as ObserverRequestState};
 
@@ -368,8 +366,8 @@ struct RequestsFuture {
 impl Future for RequestsFuture {
 	type Output = Result<()>;
 
-	fn poll(self: Pin<&mut Self>, mut context: &mut Context<'_>) -> Poll<Self::Output> {
-		(self.get_mut().poll_fn)(&mut context)
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		(self.get_mut().poll_fn)(context)
 	}
 }
 
@@ -705,15 +703,13 @@ where
 /// TODO Add docs please
 ///
 /// Returns
-pub async fn upcake<C, R>(
+pub async fn upcake<C>(
 	mut config: Config,
 	context: Option<C>,
-	_reporter: &mut R,
 	mut observer: Box<dyn Observer<C>>,
 ) -> Result<UpcakeResult>
 where
 	C: Serialize + Clone + 'static,
-	R: Reporter,
 {
 	let mut request_states: RequestStateMap = HashMap::new();
 	let mut request_map: RequestConfigMap = HashMap::new();
@@ -770,7 +766,7 @@ where
 								None,
 								error.to_string(),
 							)),
-						);
+						)?;
 					}
 				} else {
 					unreachable!();
@@ -795,9 +791,8 @@ where
 								Event::RequestStateChanged(ObserverRequestState::Success(
 									stat_result,
 								)),
-							);
+							)?;
 							let request_config = internal_state.request_map.get(&key).unwrap();
-							// reporter.step_suite(&request_config)?;
 							let result = serde_yaml::to_value(&stat_result)?;
 
 							for assertion in request_config.assertions.iter() {
@@ -805,7 +800,7 @@ where
 								observer.on_notify(
 									&key,
 									Event::AssertionResultAdded(&assertion_result),
-								);
+								)?;
 
 								// If there is any type of failure, increment the failure_count.
 								match assertion_result {
@@ -814,12 +809,9 @@ where
 										internal_state.failure_count += 1;
 									}
 									_ => {
-										println!("Done");
+										// Do nothing.
 									}
 								}
-
-								// reporter.step_result(assertion_result)?;
-								// reporter.update(&key, Update::AssertionResult, assertion_result);
 							}
 						}
 						Err(ref error) => {
@@ -832,7 +824,7 @@ where
 										Event::AssertionResultAdded(
 											&AssertionResult::FailureOther(None, error.to_string()),
 										),
-									);
+									)?;
 								}
 								None => {
 									observer.on_notify(
@@ -840,18 +832,7 @@ where
 										Event::RequestStateChanged(ObserverRequestState::Error(
 											error,
 										)),
-									);
-									// TODO
-									println!("None");
-									// reporter.step_result(AssertionResult::FailureOther(
-									//     None,
-									//     format!("{}", error),
-									// ))?;
-									// TODO maybe enum with update types
-									// reporter.update(&key, Update::AssertionResult(AssertionResult::FailureOther(
-									//     None,
-									//     format!("{}", error),
-									// )));
+									)?;
 								}
 							};
 						}
@@ -881,62 +862,4 @@ where
 	} else {
 		Ok(UpcakeResult::Failures(internal_state.failure_count))
 	}
-
-	// reporter.start()?;
-	//
-	// let results = RequestsFuture::new(config, context).await?;
-	//
-	// let mut failure_count = 0;
-	//
-	// for result in results {
-	// 	match result {
-	// 		Ok((request_config, stat_result)) => {
-	// 			reporter.step_suite(&request_config)?;
-	// 			let result = serde_yaml::to_value(&*stat_result)?;
-	//
-	// 			for assertion in request_config.assertions.iter() {
-	// 				let assertion_result = assertion.assert(&result)?;
-	//
-	// 				// If there is any type of failure, increment the failure_count.
-	// 				match assertion_result {
-	// 					AssertionResult::Failure(_, _) | AssertionResult::FailureOther(_, _) => {
-	// 						failure_count += 1;
-	// 					}
-	// 					_ => {}
-	// 				}
-	//
-	// 				reporter.step_result(assertion_result)?;
-	// 			}
-	// 		}
-	// 		Err(error) => {
-	// 			// Request errors count towards failure counts.
-	// 			failure_count += 1;
-	// 			match error.downcast_ref::<Error>() {
-	// 				Some(error) => {
-	// 					let request_config = match error {
-	// 						Error::RequestError(request_config, _) => request_config,
-	// 						Error::DependencyError(request_config, _) => request_config,
-	// 					};
-	// 					reporter.step_suite(request_config)?;
-	// 					reporter
-	// 						.step_result(AssertionResult::FailureOther(None, error.to_string()))?;
-	// 				}
-	// 				None => {
-	// 					reporter.step_result(AssertionResult::FailureOther(
-	// 						None,
-	// 						format!("{}", error),
-	// 					))?;
-	// 				}
-	// 			};
-	// 		}
-	// 	}
-	// }
-	//
-	// reporter.end()?;
-	//
-	// if failure_count == 0 {
-	// 	Ok(UpcakeResult::Success)
-	// } else {
-	// 	Ok(UpcakeResult::Failures(failure_count))
-	// }
 }
